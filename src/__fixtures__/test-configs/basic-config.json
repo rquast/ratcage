@@ -1,0 +1,56 @@
+{
+  "version": "1.0.0",
+  "defaultProvider": "claude-code",
+  "providers": [
+    {
+      "name": "claude-code",
+      "type": "claude-code",
+      "config": {
+        "apiKey": "test-api-key-123"
+      }
+    }
+  ],
+  "tools": [
+    {
+      "name": "test-tool",
+      "enabled": true,
+      "config": {
+        "timeout": 30000
+      }
+    }
+  ],
+  "hooks": {
+    "preToolUse": ["validate-input"],
+    "postToolUse": ["log-result"]
+  },
+  "logging": {
+    "level": "info",
+    "outputs": ["console", "file"],
+    "file": {
+      "path": "./logs/ratcage.log",
+      "maxSize": "10MB",
+      "maxFiles": 5
+    }
+  },
+  "permissions": {
+    "defaultAllow": false,
+    "rules": [
+      {
+        "permission": "file.read",
+        "allow": true,
+        "conditions": []
+      },
+      {
+        "permission": "bash.execute",
+        "allow": true,
+        "conditions": [
+          {
+            "type": "command",
+            "operator": "startsWith",
+            "value": "echo"
+          }
+        ]
+      }
+    ]
+  }
+}
