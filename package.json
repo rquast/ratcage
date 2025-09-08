@@ -1,0 +1,49 @@
+{
+  "name": "ratcage",
+  "version": "0.0.1",
+  "description": "RatCage - A universal coding agent CLI wrapper",
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "ratcage": "./dist/cli.js"
+  },
+  "scripts": {
+    "dev": "nodemon --watch src --exec node --loader @swc-node/register/esm src/cli.ts",
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts,.js",
+    "lint:fix": "eslint . --ext .ts,.js --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm run test",
+    "postinstall": "npm run setup:hooks",
+    "setup:hooks": "cd .claude/hooks/cli-app && npm install && chmod +x quality-check.js"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^14.0.0",
+    "inquirer": "^12.9.4"
+  },
+  "devDependencies": {
+    "@swc-node/register": "^1.10.10",
+    "@swc/core": "^1.13.3",
+    "@types/node": "^22.10.2",
+    "@types/inquirer": "^9.0.7",
+    "@typescript-eslint/eslint-plugin": "^8.35.0",
+    "@typescript-eslint/parser": "^8.35.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "eslint": "^9.29.0",
+    "eslint-config-prettier": "^10.1.5",
+    "eslint-plugin-prettier": "^5.5.0",
+    "nodemon": "^3.1.10",
+    "prettier": "^3.6.0",
+    "typescript": "~5.7.2",
+    "unplugin-swc": "^1.5.5",
+    "vitest": "^3.2.4"
+  }
+}

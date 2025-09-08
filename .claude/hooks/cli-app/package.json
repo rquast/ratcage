@@ -1,0 +1,7 @@
+{
+  "name": "cli-app-hooks",
+  "type": "module",
+  "dependencies": {
+    "glob": "^11.0.0"
+  }
+}

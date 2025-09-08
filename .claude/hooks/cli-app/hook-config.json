@@ -1,0 +1,74 @@
+{
+  "version": "1.0.0",
+  "name": "CLI App Quality Check Hook",
+  "description": "Quality checks optimized for CLI applications",
+  "projectType": "cli-app",
+  "typescript": {
+    "enabled": true,
+    "showDependencyErrors": false
+  },
+  "eslint": {
+    "enabled": true,
+    "autofix": true
+  },
+  "prettier": {
+    "enabled": true,
+    "autofix": true
+  },
+  "general": {
+    "autofixSilent": true,
+    "debug": false
+  },
+  "rules": {
+    "console": {
+      "enabled": false,
+      "severity": "info",
+      "message": "Console statements are allowed in CLI applications"
+    },
+    "asAny": {
+      "enabled": true,
+      "severity": "error",
+      "message": "Avoid using 'any' type or 'as unknown as' - use specific types, unknown, or generics instead"
+    },
+    "debugger": {
+      "enabled": true,
+      "severity": "error",
+      "message": "Remove debugger statements before committing"
+    },
+    "todos": {
+      "enabled": true,
+      "severity": "info",
+      "patterns": ["TODO", "FIXME", "HACK"]
+    },
+    "trivialTests": {
+      "enabled": true,
+      "severity": "error",
+      "message": "Write real tests that verify actual functionality"
+    },
+    "eslintDisable": {
+      "enabled": true,
+      "severity": "error",
+      "message": "Fix the underlying issue instead of disabling the linter"
+    }
+  },
+  "fileTypes": {
+    "cli": {
+      "patterns": ["*.ts", "*.js"],
+      "paths": ["src/", "lib/", "bin/"]
+    },
+    "test": {
+      "patterns": ["*.test.ts", "*.spec.ts", "*.test.js", "*.spec.js"],
+      "paths": ["__tests__/", "test/", "tests/"]
+    }
+  },
+  "ignore": {
+    "paths": [
+      "node_modules/",
+      "build/",
+      "dist/",
+      "coverage/",
+      "*.config.js",
+      "*.config.ts"
+    ]
+  }
+}
