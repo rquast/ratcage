@@ -35,6 +35,7 @@ export default defineConfig({
         'os',
         'stream',
         'events',
+        'readline',
       ],
       output: {
         preserveModules: true,

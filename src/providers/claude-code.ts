@@ -174,13 +174,47 @@ export class ClaudeCodeProvider implements Provider {
                 streamEvent.type === 'content_block_start' &&
                 streamEvent.content_block?.type === 'tool_use'
               ) {
+                const toolName = streamEvent.content_block.name;
+                const toolInput = streamEvent.content_block.input as Record<
+                  string,
+                  unknown
+                >;
+
+                // Show comprehensive tool call information
+                let toolDescription = `\n🔧 TOOL CALL: ${toolName}\n`;
+                toolDescription += `┌─────────────────────────────────────\n`;
+
+                if (toolInput && Object.keys(toolInput).length > 0) {
+                  for (const [key, value] of Object.entries(toolInput)) {
+                    let valueStr: string;
+                    if (typeof value === 'string') {
+                      valueStr = value;
+                    } else if (typeof value === 'object' && value !== null) {
+                      valueStr = JSON.stringify(value, null, 2);
+                    } else {
+                      valueStr = String(value);
+                    }
+
+                    // Show full value, don't truncate
+                    const lines = valueStr.split('\n');
+                    toolDescription += `│ ${key}:\n`;
+                    for (const line of lines) {
+                      toolDescription += `│   ${line}\n`;
+                    }
+                    toolDescription += `│\n`;
+                  }
+                } else {
+                  toolDescription += `│ (no parameters)\n`;
+                }
+
+                toolDescription += `└─────────────────────────────────────\n`;
+
                 yield {
                   type: 'tool_use',
-                  content: JSON.stringify(
-                    streamEvent.content_block.input ?? {}
-                  ),
+                  content: toolDescription,
                   metadata: {
-                    toolName: streamEvent.content_block.name,
+                    toolName: toolName,
+                    toolInput: toolInput,
                     session_id: event.session_id,
                   },
                 };

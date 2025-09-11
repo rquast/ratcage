@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import inquirer from 'inquirer';
+import { createInterface } from 'readline';
 import { ClaudeAPIProvider } from '../providers/claude-api';
 import type { Provider } from '../types/provider';
 import { readFileSync } from 'fs';
@@ -275,9 +275,7 @@ export class CLI {
       return;
     }
 
-    console.log(
-      chalk.green('🤖 CageTools Chat - Full Claude Code CLI Experience')
-    );
+    console.log(chalk.green('🤖 CageTools Chat - Enhanced Interactive Mode'));
     console.log(
       chalk.gray(
         '💡 Type "exit" to quit, "clear" to clear conversation history'
@@ -286,94 +284,230 @@ export class CLI {
     console.log(
       chalk.gray('✨ Conversation context is preserved across messages')
     );
+    console.log(
+      chalk.gray('🚀 Press ESC to stop current response, then continue typing')
+    );
     console.log();
 
     await this.initializeProvider(options?.provider ?? 'claude-code');
 
     const session = this.provider?.createSession();
 
-    while (true) {
-      const { prompt } = await inquirer.prompt<{ prompt: string }>([
-        {
-          type: options?.multiline ? 'editor' : 'input',
-          name: 'prompt',
-          message: chalk.cyan('>'),
-        },
-      ]);
+    // Set up custom readline interface for continuous typing
+    const rl = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      prompt: chalk.cyan('> '),
+    });
 
-      if (prompt.toLowerCase() === 'exit') {
-        break;
+    // Enable raw mode for key handling
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+    }
+
+    let currentInput = '';
+    let isProcessing = false;
+    let currentResponseController: AbortController | null = null;
+
+    const showPrompt = () => {
+      if (!isProcessing) {
+        process.stdout.write(chalk.cyan('> ') + currentInput);
+      }
+    };
+
+    const clearCurrentLine = () => {
+      process.stdout.write('\r\x1b[K');
+    };
+
+    const processInput = async (input: string) => {
+      if (input.toLowerCase() === 'exit') {
+        rl.close();
+        return;
       }
 
-      if (prompt.toLowerCase() === 'clear') {
+      if (input.toLowerCase() === 'clear') {
         console.clear();
-        continue;
+        showPrompt();
+        return;
       }
 
       if (this.provider) {
-        const response = this.provider.query(prompt, { session, stream: true });
-        let inCodeBlock = false;
+        isProcessing = true;
+        currentResponseController = new AbortController();
 
-        for await (const chunk of response) {
-          switch (chunk.type) {
-            case 'thinking':
-              // Show thinking in real-time exactly like Claude Code CLI
-              process.stdout.write(chalk.gray(chunk.content));
+        clearCurrentLine();
+        console.log(chalk.cyan('> ') + input);
+        console.log();
+
+        try {
+          const response = this.provider.query(input, {
+            session,
+            stream: true,
+          });
+          let inCodeBlock = false;
+
+          for await (const chunk of response) {
+            // Check if we should abort
+            if (currentResponseController?.signal.aborted) {
+              console.log();
+              console.log(chalk.yellow('🛑 Response interrupted'));
+              console.log();
               break;
-            case 'code_snippet':
-              if (!inCodeBlock) {
+            }
+
+            switch (chunk.type) {
+              case 'thinking':
+                process.stdout.write(chalk.gray(chunk.content));
+                break;
+              case 'code_snippet':
+                if (!inCodeBlock) {
+                  process.stdout.write(
+                    chalk.blue('\n```' + (chunk.language ?? '') + '\n')
+                  );
+                  inCodeBlock = true;
+                }
+                process.stdout.write(chalk.cyan(chunk.content));
+                if (chunk.isComplete) {
+                  process.stdout.write(chalk.blue('\n```\n'));
+                  inCodeBlock = false;
+                }
+                break;
+              case 'partial_code':
+                process.stdout.write(chalk.cyan(chunk.content));
+                break;
+              case 'tool_use':
                 process.stdout.write(
-                  chalk.blue('\n```' + (chunk.language ?? '') + '\n')
+                  chalk.yellow(
+                    `[Tool: ${chunk.metadata?.toolName ?? 'unknown'}] `
+                  )
                 );
-                inCodeBlock = true;
-              }
-              process.stdout.write(chalk.cyan(chunk.content));
-              if (chunk.isComplete) {
-                process.stdout.write(chalk.blue('\n```\n'));
-                inCodeBlock = false;
-              }
-              break;
-            case 'partial_code':
-              process.stdout.write(chalk.cyan(chunk.content));
-              break;
-            case 'tool_use':
-              process.stdout.write(
-                chalk.yellow(
-                  `[Tool: ${chunk.metadata?.toolName ?? 'unknown'}] `
-                )
-              );
-              process.stdout.write(chunk.content);
-              break;
-            case 'tool_result':
-              process.stdout.write(chalk.green(`[Result] ${chunk.content}`));
-              break;
-            case 'error':
-              process.stdout.write(chalk.red(`[Error] ${chunk.content}`));
-              break;
-            case 'text':
-            default:
-              process.stdout.write(chunk.content);
-              break;
+                process.stdout.write(chunk.content);
+                break;
+              case 'tool_result':
+                process.stdout.write(chalk.green(`[Result] ${chunk.content}`));
+                break;
+              case 'error':
+                process.stdout.write(chalk.red(`[Error] ${chunk.content}`));
+                break;
+              case 'text':
+              default:
+                process.stdout.write(chunk.content);
+                break;
+            }
           }
-        }
 
-        // Close any open code block
-        if (inCodeBlock) {
-          process.stdout.write(chalk.blue('\n```\n'));
-        }
+          // Close any open code block
+          if (inCodeBlock) {
+            process.stdout.write(chalk.blue('\n```\n'));
+          }
 
-        console.log(); // New line after response
+          console.log(); // New line after response
+        } catch (error) {
+          if (!currentResponseController?.signal.aborted) {
+            console.log();
+            console.log(
+              chalk.red(
+                `Error: ${error instanceof Error ? error.message : String(error)}`
+              )
+            );
+            console.log();
+          }
+        } finally {
+          isProcessing = false;
+          currentResponseController = null;
+          currentInput = '';
+          showPrompt();
+        }
       }
-    }
+    };
 
-    if (session && this.provider) {
-      await this.provider.destroySession(session.id);
-    }
-    console.log(
-      chalk.green(
-        '\n👋 Chat session ended. Your conversation has been saved in Claude Code.'
-      )
-    );
+    // Handle key input
+    process.stdin.on('data', key => {
+      const keyStr = key.toString();
+      const keyCode = key[0];
+
+      // ESC key (27) - stop current response
+      if (keyCode === 27) {
+        if (isProcessing && currentResponseController) {
+          currentResponseController.abort();
+        }
+        return;
+      }
+
+      // Ctrl+C (3) - exit completely
+      if (keyCode === 3) {
+        console.log();
+        console.log(chalk.yellow('👋 Goodbye!'));
+        rl.close();
+        return;
+      }
+
+      // Don't process input if we're currently processing a response
+      if (isProcessing) {
+        return;
+      }
+
+      // Enter key (13) - send message
+      if (keyCode === 13) {
+        if (currentInput.trim()) {
+          processInput(currentInput.trim()).catch((error: Error) => {
+            console.error(
+              chalk.red(`Error processing input: ${error.message}`)
+            );
+          });
+        } else {
+          clearCurrentLine();
+          showPrompt();
+        }
+        return;
+      }
+
+      // Backspace (127) - delete character
+      if (keyCode === 127) {
+        if (currentInput.length > 0) {
+          currentInput = currentInput.slice(0, -1);
+          clearCurrentLine();
+          showPrompt();
+        }
+        return;
+      }
+
+      // Regular characters
+      if (keyCode >= 32 && keyCode <= 126) {
+        currentInput += keyStr;
+        clearCurrentLine();
+        showPrompt();
+      }
+    });
+
+    // Handle readline close
+    rl.on('close', () => {
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode(false);
+      }
+
+      if (session && this.provider) {
+        this.provider.destroySession(session.id).catch(() => {
+          // Ignore errors during cleanup
+        });
+      }
+
+      console.log(
+        chalk.green(
+          '\n👋 Chat session ended. Your conversation has been saved in Claude Code.'
+        )
+      );
+      process.exit(0);
+    });
+
+    // Show initial prompt
+    showPrompt();
+
+    // Keep the process alive
+    return new Promise(() => {
+      // This promise never resolves, keeping the chat session alive
+      // until the user exits manually
+    });
   }
 
   async initializeProvider(providerName: string): Promise<void> {
