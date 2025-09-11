@@ -134,7 +134,13 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
 
       expect(spawn).toHaveBeenCalledWith(
         'claude',
-        expect.any(Array),
+        [
+          '--print',
+          '--output-format=stream-json',
+          '--include-partial-messages',
+          '--verbose',
+          'Hello',
+        ],
         expect.any(Object)
       );
       expect(chunks.length).toBeGreaterThan(0);
@@ -158,10 +164,16 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
       await provider.initialize({});
       await provider.query('Test').next();
 
-      // Claude Code CLI doesn't use API keys anymore - it uses OAuth
+      // Claude Code CLI uses OAuth authentication
       expect(spawn).toHaveBeenCalledWith(
         'claude',
-        ['--print', 'Test'],
+        [
+          '--print',
+          '--output-format=stream-json',
+          '--include-partial-messages',
+          '--verbose',
+          'Test',
+        ],
         expect.any(Object)
       );
     });
@@ -227,9 +239,16 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
       await expect(provider.dispose()).resolves.not.toThrow();
     });
 
-    it('should handle streaming responses from CLI', async () => {
+    it('should handle streaming responses from CLI with JSON format', async () => {
+      // Mock streaming JSON response with real Claude Code format
+      const jsonResponse = [
+        '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}},"session_id":"test-session"}',
+        '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":" from Claude!"}},"session_id":"test-session"}',
+        '',
+      ].join('\n');
+
       const mockProcess = createMockProcess({
-        stdout: createMockReadable('Hello from Claude!'),
+        stdout: createMockReadable(jsonResponse),
         on: vi.fn((event, callback) => {
           if (event === 'close') {
             setImmediate(() => callback(0));
@@ -248,7 +267,22 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         chunks.push(chunk);
       }
 
-      expect(chunks.length).toBeGreaterThanOrEqual(1);
+      expect(spawn).toHaveBeenCalledWith(
+        'claude',
+        [
+          '--print',
+          '--output-format=stream-json',
+          '--include-partial-messages',
+          '--verbose',
+          'Hello',
+        ],
+        expect.any(Object)
+      );
+      expect(chunks.length).toBe(2);
+      expect(chunks[0].type).toBe('text');
+      expect(chunks[0].content).toBe('Hello');
+      expect(chunks[1].type).toBe('text');
+      expect(chunks[1].content).toBe(' from Claude!');
     });
 
     it('should handle tool execution through CLI', async () => {
@@ -286,7 +320,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
       expect(chunks[0].content).toContain('Tool executed');
     });
 
-    it('should maintain persistent session with CLI', async () => {
+    it('should maintain persistent session with proper session ID and continue flags', async () => {
       const mockProcess1 = createMockProcess({
         stdout: createMockReadable('First response'),
         on: vi.fn((event, callback) => {
@@ -313,20 +347,53 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
       await provider.initialize({});
 
       const session = provider.createSession();
+      expect(session.id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      ); // UUID format
 
-      // First query
+      // First query - should use --session-id
       const chunks1: StreamChunk[] = [];
       for await (const chunk of provider.query('First message', { session })) {
         chunks1.push(chunk);
       }
 
-      // Second query
+      // Second query - should use --continue
       const chunks2: StreamChunk[] = [];
       for await (const chunk of provider.query('Second message', { session })) {
         chunks2.push(chunk);
       }
 
-      // Claude Code CLI spawns a new process for each query
+      // Verify first call uses session ID
+      expect(spawn).toHaveBeenNthCalledWith(
+        2,
+        'claude',
+        [
+          '--print',
+          '--output-format=stream-json',
+          '--include-partial-messages',
+          '--verbose',
+          '--session-id',
+          session.id,
+          'First message',
+        ],
+        expect.any(Object)
+      );
+
+      // Verify second call uses continue
+      expect(spawn).toHaveBeenNthCalledWith(
+        3,
+        'claude',
+        [
+          '--print',
+          '--output-format=stream-json',
+          '--include-partial-messages',
+          '--verbose',
+          '--continue',
+          'Second message',
+        ],
+        expect.any(Object)
+      );
+
       expect(spawn).toHaveBeenCalledTimes(3); // 1 for which, 2 for queries
       expect(chunks1[0].content).toContain('First response');
       expect(chunks2[0].content).toContain('Second response');
@@ -341,10 +408,15 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
       );
     });
 
-    it('should parse structured output from CLI', async () => {
-      // Since we're using text mode, just test text output
+    it('should parse tool usage from JSON stream', async () => {
+      const jsonResponse = [
+        '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","name":"bash","input":{"command":"ls"}}},"session_id":"test-session"}',
+        '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Files listed successfully"}},"session_id":"test-session"}',
+        '',
+      ].join('\n');
+
       const mockProcess = createMockProcess({
-        stdout: createMockReadable('Hello from Claude'),
+        stdout: createMockReadable(jsonResponse),
         on: vi.fn((event, callback) => {
           if (event === 'close') {
             setImmediate(() => callback(0));
@@ -359,13 +431,117 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
       await provider.initialize({});
 
       const chunks: StreamChunk[] = [];
-      for await (const chunk of provider.query('Hello')) {
+      for await (const chunk of provider.query('List files', {
+        stream: true,
+      })) {
         chunks.push(chunk);
       }
 
-      expect(chunks[0].content).toBe('Hello from Claude');
-      expect(chunks[0].type).toBe('text');
-      expect(chunks[0].metadata).toBeDefined();
+      expect(chunks.length).toBe(2);
+      expect(chunks[0].type).toBe('tool_use');
+      expect(chunks[0].metadata?.toolName).toBe('bash');
+      expect(chunks[1].type).toBe('text');
+      expect(chunks[1].content).toBe('Files listed successfully');
+    });
+
+    it('should handle session destruction properly', async () => {
+      mockedSpawn.mockReturnValueOnce(createWhichMock(true));
+
+      await provider.initialize({});
+
+      const session = provider.createSession();
+      const sessionId = session.id;
+
+      // Session should be tracked
+      expect(provider['activeSessions'].has(sessionId)).toBe(true);
+
+      // Destroy session
+      await provider.destroySession(sessionId);
+
+      // Session should be removed from tracking
+      expect(provider['activeSessions'].has(sessionId)).toBe(false);
+    });
+
+    it('should always use streaming JSON format even without stream option', async () => {
+      const mockProcess = createMockProcess({
+        stdout: createMockReadable('Response without streaming'),
+        on: vi.fn((event, callback) => {
+          if (event === 'close') {
+            setImmediate(() => callback(0));
+          }
+        }),
+      });
+
+      mockedSpawn
+        .mockReturnValueOnce(createWhichMock(true))
+        .mockReturnValueOnce(mockProcess);
+
+      await provider.initialize({});
+
+      const chunks: StreamChunk[] = [];
+      for await (const chunk of provider.query('Test', { stream: false })) {
+        chunks.push(chunk);
+      }
+
+      // Should still use streaming format for full Claude Code experience
+      expect(spawn).toHaveBeenCalledWith(
+        'claude',
+        [
+          '--print',
+          '--output-format=stream-json',
+          '--include-partial-messages',
+          '--verbose',
+          'Test',
+        ],
+        expect.any(Object)
+      );
+    });
+  });
+
+  describe('Session Management', () => {
+    it('should generate valid UUIDs for sessions', () => {
+      const session1 = provider.createSession();
+      const session2 = provider.createSession();
+
+      // Should be different UUIDs
+      expect(session1.id).not.toBe(session2.id);
+
+      // Should match UUID format
+      const uuidRegex =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      expect(session1.id).toMatch(uuidRegex);
+      expect(session2.id).toMatch(uuidRegex);
+    });
+
+    it('should handle multiple concurrent sessions', async () => {
+      mockedSpawn.mockReturnValueOnce(createWhichMock(true));
+
+      await provider.initialize({});
+
+      const session1 = provider.createSession();
+      const session2 = provider.createSession();
+
+      // Both sessions should be tracked
+      expect(provider['activeSessions'].has(session1.id)).toBe(true);
+      expect(provider['activeSessions'].has(session2.id)).toBe(true);
+
+      // Sessions should have different IDs
+      expect(session1.id).not.toBe(session2.id);
+    });
+
+    it('should clear all sessions on disconnect', async () => {
+      mockedSpawn.mockReturnValueOnce(createWhichMock(true));
+
+      await provider.initialize({});
+
+      provider.createSession();
+      provider.createSession();
+
+      expect(provider['activeSessions'].size).toBe(2);
+
+      await provider.disconnect();
+
+      expect(provider['activeSessions'].size).toBe(0);
     });
   });
 });

@@ -194,20 +194,69 @@ export class CLI {
         throw new Error('Provider not initialized');
       }
 
+      // Always create a session for consistent experience
+      const session = { id: 'single-query-session', messages: [], state: {} };
+
       const response = this.provider.query(prompt, {
-        stream: options.stream,
+        stream: options.stream ?? true, // Default to streaming for full experience
         session: options.session
           ? { id: options.session, messages: [], state: {} }
-          : undefined,
+          : session,
       });
 
       let fullResponse = '';
+      let inCodeBlock = false;
+
       for await (const chunk of response) {
         if (options.stream) {
-          process.stdout.write(chunk.content);
+          switch (chunk.type) {
+            case 'thinking':
+              // Show thinking in real-time exactly like Claude Code CLI
+              process.stdout.write(chalk.gray(chunk.content));
+              break;
+            case 'code_snippet':
+              if (!inCodeBlock) {
+                process.stdout.write(
+                  chalk.blue('\n```' + (chunk.language ?? '') + '\n')
+                );
+                inCodeBlock = true;
+              }
+              process.stdout.write(chalk.cyan(chunk.content));
+              if (chunk.isComplete) {
+                process.stdout.write(chalk.blue('\n```\n'));
+                inCodeBlock = false;
+              }
+              break;
+            case 'partial_code':
+              process.stdout.write(chalk.cyan(chunk.content));
+              break;
+            case 'tool_use':
+              process.stdout.write(
+                chalk.yellow(
+                  `[Tool: ${chunk.metadata?.toolName ?? 'unknown'}] `
+                )
+              );
+              process.stdout.write(chunk.content);
+              break;
+            case 'tool_result':
+              process.stdout.write(chalk.green(`[Result] ${chunk.content}`));
+              break;
+            case 'error':
+              process.stdout.write(chalk.red(`[Error] ${chunk.content}`));
+              break;
+            case 'text':
+            default:
+              process.stdout.write(chunk.content);
+              break;
+          }
         } else {
           fullResponse += chunk.content;
         }
+      }
+
+      // Close any open code block in streaming mode
+      if (options.stream && inCodeBlock) {
+        process.stdout.write(chalk.blue('\n```\n'));
       }
 
       if (!options.stream) {
@@ -226,8 +275,18 @@ export class CLI {
       return;
     }
 
-    console.log(chalk.green('Starting interactive chat mode...'));
-    console.log(chalk.gray('Type "exit" to quit, "clear" to clear history'));
+    console.log(
+      chalk.green('🤖 CageTools Chat - Full Claude Code CLI Experience')
+    );
+    console.log(
+      chalk.gray(
+        '💡 Type "exit" to quit, "clear" to clear conversation history'
+      )
+    );
+    console.log(
+      chalk.gray('✨ Conversation context is preserved across messages')
+    );
+    console.log();
 
     await this.initializeProvider(options?.provider ?? 'claude-code');
 
@@ -252,10 +311,57 @@ export class CLI {
       }
 
       if (this.provider) {
-        const response = this.provider.query(prompt, { session });
+        const response = this.provider.query(prompt, { session, stream: true });
+        let inCodeBlock = false;
+
         for await (const chunk of response) {
-          process.stdout.write(chunk.content);
+          switch (chunk.type) {
+            case 'thinking':
+              // Show thinking in real-time exactly like Claude Code CLI
+              process.stdout.write(chalk.gray(chunk.content));
+              break;
+            case 'code_snippet':
+              if (!inCodeBlock) {
+                process.stdout.write(
+                  chalk.blue('\n```' + (chunk.language ?? '') + '\n')
+                );
+                inCodeBlock = true;
+              }
+              process.stdout.write(chalk.cyan(chunk.content));
+              if (chunk.isComplete) {
+                process.stdout.write(chalk.blue('\n```\n'));
+                inCodeBlock = false;
+              }
+              break;
+            case 'partial_code':
+              process.stdout.write(chalk.cyan(chunk.content));
+              break;
+            case 'tool_use':
+              process.stdout.write(
+                chalk.yellow(
+                  `[Tool: ${chunk.metadata?.toolName ?? 'unknown'}] `
+                )
+              );
+              process.stdout.write(chunk.content);
+              break;
+            case 'tool_result':
+              process.stdout.write(chalk.green(`[Result] ${chunk.content}`));
+              break;
+            case 'error':
+              process.stdout.write(chalk.red(`[Error] ${chunk.content}`));
+              break;
+            case 'text':
+            default:
+              process.stdout.write(chunk.content);
+              break;
+          }
         }
+
+        // Close any open code block
+        if (inCodeBlock) {
+          process.stdout.write(chalk.blue('\n```\n'));
+        }
+
         console.log(); // New line after response
       }
     }
@@ -263,7 +369,11 @@ export class CLI {
     if (session && this.provider) {
       await this.provider.destroySession(session.id);
     }
-    console.log(chalk.green('Chat ended.'));
+    console.log(
+      chalk.green(
+        '\n👋 Chat session ended. Your conversation has been saved in Claude Code.'
+      )
+    );
   }
 
   async initializeProvider(providerName: string): Promise<void> {

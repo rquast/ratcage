@@ -14,7 +14,7 @@ export default defineConfig({
         'cli/index': resolve(__dirname, 'src/cli/index.ts'),
       },
       formats: ['es'],
-      fileName: (format, entryName) => `${entryName}.js`,
+      fileName: (_, entryName) => `${entryName}.js`,
     },
     rollupOptions: {
       external: [

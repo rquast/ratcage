@@ -58,9 +58,18 @@ export interface ProviderSession {
 }
 
 export interface StreamChunk {
-  type: 'text' | 'tool_use' | 'tool_result' | 'error';
+  type:
+    | 'text'
+    | 'tool_use'
+    | 'tool_result'
+    | 'error'
+    | 'thinking'
+    | 'code_snippet'
+    | 'partial_code';
   content: string;
   metadata?: Record<string, unknown>;
+  language?: string; // For code snippets
+  isComplete?: boolean; // For partial updates
 }
 
 export interface Provider {
