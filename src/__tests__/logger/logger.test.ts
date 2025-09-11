@@ -132,7 +132,7 @@ describe('Logger', () => {
 
       logger.info('Test message');
 
-      const call = mockConsoleInfo.mock.calls[0][0];
+      const call = mockConsoleInfo.mock.calls[0][0] as string;
       const parsed = JSON.parse(call);
 
       expect(parsed.level).toBe('info');
@@ -185,7 +185,7 @@ describe('Logger', () => {
 
       logger.info('User action', { userId: '123', action: 'login' });
 
-      const call = mockConsoleInfo.mock.calls[0][0];
+      const call = mockConsoleInfo.mock.calls[0][0] as string;
       const parsed = JSON.parse(call);
 
       expect(parsed.message).toBe('User action');
@@ -199,7 +199,7 @@ describe('Logger', () => {
       const error = new Error('Test error');
       logger.error('Operation failed', { error });
 
-      const call = mockConsoleError.mock.calls[0][0];
+      const call = mockConsoleError.mock.calls[0][0] as string;
       const parsed = JSON.parse(call);
 
       expect(parsed.message).toBe('Operation failed');
@@ -210,7 +210,7 @@ describe('Logger', () => {
     it('should handle circular references in context', () => {
       logger = new Logger({ format: 'json' });
 
-      interface CircularRef {
+      interface CircularRef extends Record<string, unknown> {
         a: number;
         self?: CircularRef;
       }
@@ -306,7 +306,7 @@ describe('Logger', () => {
 
       timer.end();
 
-      const call = mockConsoleDebug.mock.calls[0][0];
+      const call = mockConsoleDebug.mock.calls[0][0] as string;
       const parsed = JSON.parse(call);
 
       expect(parsed.message).toContain('operation');

@@ -383,7 +383,9 @@ describe('HookManager', () => {
 
       hooks.forEach(hook => hookManager.register(hook));
 
-      const originalData = { original: true };
+      const originalData: { original: boolean; modified?: boolean } = {
+        original: true,
+      };
       await hookManager.execute('pre-tool-use', {
         timestamp: new Date(),
         sessionId: 'test',

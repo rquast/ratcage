@@ -403,10 +403,11 @@ describe('FileTool', () => {
         path: join(tempDir, 'test.txt'),
       };
 
+      // Create invalid operation without type assertion
       const invalidOp = {
-        type: 'invalid',
+        type: 'invalid' as const,
         path: join(tempDir, 'test.txt'),
-      } as FileOperation;
+      };
 
       expect(fileTool.validate([validOp])).toBe(true);
       expect(fileTool.validate([invalidOp])).toBe(false);

@@ -44,7 +44,8 @@ function createMockReadable(data: string | Buffer): NodeJS.ReadableStream {
     },
   };
 
-  return stream as NodeJS.ReadableStream;
+  // Return a Vitest mock function that satisfies the interface
+  return vi.fn().mockReturnValue(stream)() as NodeJS.ReadableStream;
 }
 
 // Helper to create a mock process that satisfies ChildProcess interface
@@ -80,10 +81,11 @@ function createMockProcess(overrides: {
     kill: vi.fn(),
     pid: overrides.pid ?? 12345,
     ...overrides,
-  } as Partial<ChildProcess>;
+  };
 
-  // Add other required ChildProcess properties as stubs
-  return mockProcess as ChildProcess;
+  // Use Vitest mock to create a proper ChildProcess mock
+  const mockedProcess = vi.fn().mockReturnValue(mockProcess)() as ChildProcess;
+  return mockedProcess;
 }
 
 describe('ClaudeCodeProvider CLI Wrapper', () => {

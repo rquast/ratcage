@@ -178,7 +178,7 @@ export class CLI {
     }
   }
 
-  private async handleQuery(
+  async handleQuery(
     prompt: string | undefined,
     options: QueryOptions
   ): Promise<void> {
@@ -336,7 +336,6 @@ export class CLI {
         currentResponseController = new AbortController();
 
         clearCurrentLine();
-        console.log(chalk.cyan('> ') + input);
         console.log();
 
         try {

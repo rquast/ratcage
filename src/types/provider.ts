@@ -29,6 +29,7 @@ export interface ProviderConfig {
   temperature?: number;
   model?: string;
   timeout?: number;
+  retries?: number;
   enableMCP?: boolean;
 }
 

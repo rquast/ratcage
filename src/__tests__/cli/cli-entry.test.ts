@@ -84,7 +84,7 @@ describe('CLI Entry Point', () => {
   describe('Query Command', () => {
     it('should accept a prompt as argument', async () => {
       // Mock provider to prevent actual execution
-      vi.spyOn(cli, 'handleQuery').mockResolvedValue();
+      vi.spyOn(cli, 'handleQuery').mockImplementation(async () => {});
 
       // parse returns void, so we just test it doesn't throw
       await expect(
@@ -147,7 +147,9 @@ describe('CLI Entry Point', () => {
       });
 
       // Mock handleQuery to prevent actual execution
-      const handleQuerySpy = vi.spyOn(cli, 'handleQuery').mockResolvedValue();
+      const handleQuerySpy = vi
+        .spyOn(cli, 'handleQuery')
+        .mockImplementation(async () => {});
 
       await cli.parseWithStdin([], mockStdin);
 
@@ -387,9 +389,11 @@ describe('CLI Entry Point', () => {
     it('should show help on no arguments', async () => {
       const helpSpy = vi.spyOn(cli.program, 'help').mockImplementation(() => {
         // Mock help to avoid process.exit
-        return cli.program;
+        throw new Error('help called'); // Commander.help() never returns
       });
-      await cli.parse([]);
+
+      // Expect the error to be thrown since help() never returns normally
+      await expect(cli.parse([])).rejects.toThrow('help called');
       expect(helpSpy).toHaveBeenCalled();
     });
 
@@ -413,11 +417,23 @@ describe('CLI Entry Point', () => {
       });
       // Use proper provider mock
       const mockProvider: Provider = {
+        name: 'mock-provider',
+        capabilities: {
+          streaming: true,
+          tools: false,
+          mcp: false,
+          subagents: false,
+          hooks: false,
+          webSearch: false,
+          codeExecution: false,
+        },
         initialize: vi.fn(),
         query: mockQuery,
         createSession: vi.fn(),
         destroySession: vi.fn(),
         disconnect: vi.fn(),
+        executeTools: vi.fn(),
+        getUsage: vi.fn(),
       };
       // Access private property for testing
       Object.defineProperty(cli, 'provider', {
@@ -441,11 +457,23 @@ describe('CLI Entry Point', () => {
       });
       // Use proper provider mock
       const mockProvider: Provider = {
+        name: 'mock-provider',
+        capabilities: {
+          streaming: true,
+          tools: false,
+          mcp: false,
+          subagents: false,
+          hooks: false,
+          webSearch: false,
+          codeExecution: false,
+        },
         initialize: vi.fn(),
         query: mockQuery,
         createSession: vi.fn(),
         destroySession: vi.fn(),
         disconnect: vi.fn(),
+        executeTools: vi.fn(),
+        getUsage: vi.fn(),
       };
       // Access private property for testing
       Object.defineProperty(cli, 'provider', {
@@ -467,11 +495,23 @@ describe('CLI Entry Point', () => {
       });
       // Use proper provider mock
       const mockProvider: Provider = {
+        name: 'mock-provider',
+        capabilities: {
+          streaming: true,
+          tools: false,
+          mcp: false,
+          subagents: false,
+          hooks: false,
+          webSearch: false,
+          codeExecution: false,
+        },
         initialize: vi.fn(),
         query: mockQuery,
         createSession: vi.fn(),
         destroySession: vi.fn(),
         disconnect: vi.fn(),
+        executeTools: vi.fn(),
+        getUsage: vi.fn(),
       };
       // Access private property for testing
       Object.defineProperty(cli, 'provider', {
