@@ -1,5 +1,5 @@
 import ora from 'ora';
-import type { Ora } from 'ora';
+import type { Ora, Options as OraOptions } from 'ora';
 import type {
   ProgressStatus,
   SpinnerOptions,
@@ -42,12 +42,16 @@ export class ProgressManager {
     }
 
     const id = this.generateId();
-    const spinner = ora({
+    // Build ora options with proper typing
+    const oraOptions: OraOptions = {
       text,
-      spinner: options?.spinner,
-      color: options?.color,
-      interval: options?.interval,
-    }).start();
+      ...(options?.spinner && {
+        spinner: options.spinner as OraOptions['spinner'],
+      }),
+      ...(options?.color && { color: options.color as OraOptions['color'] }),
+      ...(options?.interval && { interval: options.interval }),
+    };
+    const spinner = ora(oraOptions).start();
 
     this.spinners.set(id, { id, ora: spinner });
     return id;

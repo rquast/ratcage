@@ -33,7 +33,7 @@ describe('Hook Interface', () => {
         },
         environment: {
           NODE_ENV: 'test',
-          RATCAGE_HOME: '/home/user/.ratcage',
+          CAGETOOLS_HOME: '/home/user/.cagetools',
         },
       };
 

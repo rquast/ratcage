@@ -24,8 +24,15 @@ class ConsoleTransport extends Transport {
     });
 
     // Call appropriate console method based on level
+    // Winston adds a Symbol.for('message') property to info objects
+    // We need to access it in a type-safe way
+    const infoWithSymbol = info as winston.LogEntry & {
+      [key: symbol]: unknown;
+    };
+    const messageSymbol = Symbol.for('message');
     const message =
-      (info[Symbol.for('message')] as string) ?? JSON.stringify(info);
+      (infoWithSymbol[messageSymbol] as string | undefined) ??
+      JSON.stringify(info);
 
     switch (info.level) {
       case 'error':
@@ -299,9 +306,9 @@ export class Logger {
     }
 
     const logData: Record<string, unknown> = {
-      level,
-      message,
-      timestamp: entry.timestamp.toISOString(),
+      timestamp: entry.timestamp
+        ? entry.timestamp.toISOString()
+        : new Date().toISOString(),
     };
 
     // Add context if present
@@ -314,7 +321,7 @@ export class Logger {
       logData.stack = stack;
     }
 
-    this.winston.log(logData);
+    this.winston.log(level, message, logData);
   }
 
   private sanitizeCircularRefs(obj: unknown, seen = new WeakSet()): unknown {
@@ -420,13 +427,11 @@ export class Logger {
 
           // For JSON format, we need to include duration in the main log data, not just context
           const logData: Record<string, unknown> = {
-            level: 'debug',
-            message: `${label} completed`,
             timestamp: new Date().toISOString(),
             duration,
           };
 
-          this.winston.log(logData);
+          this.winston.log('debug', `${label} completed`, logData);
         }
       },
       elapsed: () => {

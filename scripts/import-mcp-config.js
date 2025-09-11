@@ -21,7 +21,7 @@ async function importMcpConfig() {
       process.exit(1);
     }
 
-    console.log('🚀 Importing MCP configuration for RatCage project...\n');
+    console.log('🚀 Importing MCP configuration for CageTools project...\n');
 
     // Import each MCP server configuration
     for (const [serverName, serverConfig] of Object.entries(

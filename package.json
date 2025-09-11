@@ -1,16 +1,17 @@
 {
-  "name": "ratcage",
+  "name": "cagetools",
   "version": "0.0.1",
-  "description": "RatCage - A universal coding agent CLI wrapper",
+  "description": "CageTools - A universal coding agent CLI wrapper",
   "author": "",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "ratcage": "./dist/cli.js"
+    "cagetools": "./dist/cli.js"
   },
   "scripts": {
-    "dev": "nodemon --watch src --exec node --loader @swc-node/register/esm src/cli.ts",
-    "build": "tsc",
+    "dev": "vite-node src/cli.ts",
+    "dev:watch": "vite-node --watch src/cli.ts",
+    "build": "vite build",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.js",
@@ -38,6 +39,7 @@
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.61.0",
     "@swc-node/register": "^1.10.10",
+    "@swc/cli": "^0.7.8",
     "@swc/core": "^1.13.3",
     "@types/inquirer": "^9.0.7",
     "@types/node": "^22.18.1",
@@ -51,8 +53,11 @@
     "nodemon": "^3.1.10",
     "ora": "^8.2.0",
     "prettier": "^3.6.0",
+    "tsx": "^4.20.5",
     "typescript": "~5.7.2",
     "unplugin-swc": "^1.5.5",
+    "vite": "^6.3.6",
+    "vite-node": "^3.2.4",
     "vitest": "^3.2.4",
     "vitest-mock-extended": "^3.1.0"
   }

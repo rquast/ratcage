@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
-import { ClaudeCodeProvider } from '../providers/claude-code';
+import { ClaudeAPIProvider } from '../providers/claude-api';
 import type { Provider } from '../types/provider';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
@@ -46,8 +46,8 @@ export class CLI {
     ) as PackageJson;
 
     this.program
-      .name('ratcage')
-      .description('RatCage - A universal coding agent CLI wrapper')
+      .name('cagetools')
+      .description('CageTools - A universal coding agent CLI wrapper')
       .version(packageJson.version);
 
     // Global options
@@ -150,7 +150,7 @@ export class CLI {
         return;
       }
 
-      await this.program.parseAsync(['node', 'ratcage', ...argv]);
+      await this.program.parseAsync(['node', 'cagetools', ...argv]);
     } catch (error) {
       // Check if it's a Commander error
       if (error instanceof Error && error.message.includes('unknown command')) {
@@ -268,14 +268,19 @@ export class CLI {
 
   async initializeProvider(providerName: string): Promise<void> {
     switch (providerName) {
-      case 'claude-code': {
-        this.provider = new ClaudeCodeProvider();
-        const apiKey =
-          process.env.ANTHROPIC_API_KEY ?? (this.config.apiKey as string);
-        if (!apiKey) {
-          throw new Error('ANTHROPIC_API_KEY not set');
-        }
+      case 'claude-api': {
+        this.provider = new ClaudeAPIProvider();
+        // Pass any configured API key, but the provider will also check
+        // Claude Code's credentials file and env vars as fallbacks
+        const apiKey = this.config.apiKey as string | undefined;
         await this.provider.initialize({ apiKey });
+        break;
+      }
+      case 'claude-code': {
+        // Claude Code CLI doesn't need an API key, it uses the local installation
+        const { ClaudeCodeProvider } = await import('../providers/claude-code');
+        this.provider = new ClaudeCodeProvider();
+        await this.provider.initialize({});
         break;
       }
       default:

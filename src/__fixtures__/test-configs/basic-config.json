@@ -27,7 +27,7 @@
     "level": "info",
     "outputs": ["console", "file"],
     "file": {
-      "path": "./logs/ratcage.log",
+      "path": "./logs/cagetools.log",
       "maxSize": "10MB",
       "maxFiles": 5
     }

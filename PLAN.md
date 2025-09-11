@@ -1,8 +1,8 @@
-# RatCage Implementation Plan
+# CageTools Implementation Plan
 
 ## Project Overview
 
-RatCage is a universal coding agent CLI wrapper that starts with Claude Code support but is designed to be extensible to other AI coding assistants. It provides a unified interface for AI-powered development tools while exposing advanced features like hooks, MCP integration, and custom tool configurations.
+CageTools is a universal coding agent CLI wrapper that starts with Claude Code support but is designed to be extensible to other AI coding assistants. It provides a unified interface for AI-powered development tools while exposing advanced features like hooks, MCP integration, and custom tool configurations.
 
 ## Architecture Goals
 

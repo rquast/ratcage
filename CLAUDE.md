@@ -1,4 +1,4 @@
-# RatCage - Universal Coding Agent CLI Wrapper
+# CageTools - Universal Coding Agent CLI Wrapper
 
 ## MANDATORY CODING STANDARDS - ZERO TOLERANCE
 

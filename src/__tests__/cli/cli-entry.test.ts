@@ -35,7 +35,7 @@ describe('CLI Entry Point', () => {
     });
 
     it('should have correct program name and description', () => {
-      expect(cli.program.name()).toBe('ratcage');
+      expect(cli.program.name()).toBe('cagetools');
       expect(cli.program.description()).toContain(
         'universal coding agent CLI wrapper'
       );

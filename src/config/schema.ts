@@ -96,7 +96,7 @@ export const LoggerConfigSchema = z.object({
  */
 export const SessionConfigSchema = z.object({
   persistence: z.boolean().default(true),
-  storageDir: z.string().default('~/.ratcage/sessions'),
+  storageDir: z.string().default('~/.cagetools/sessions'),
   maxSessions: z.number().int().positive().default(100),
   sessionTimeout: z.number().int().positive().optional(),
   autoSave: z.boolean().default(true),
@@ -115,7 +115,7 @@ export const UIConfigSchema = z.object({
 });
 
 /**
- * Complete RatCage configuration schema
+ * Complete CageTools configuration schema
  */
 export const ConfigurationSchema = z
   .object({
@@ -137,14 +137,14 @@ export const ConfigurationSchema = z
     return true;
   });
 
-export type RatCageConfig = z.infer<typeof ConfigurationSchema>;
+export type CageToolsConfig = z.infer<typeof ConfigurationSchema>;
 
 /**
  * Validate a configuration object
  */
 export function validateConfiguration(config: unknown): {
   valid: boolean;
-  data?: RatCageConfig;
+  data?: CageToolsConfig;
   errors?: z.ZodError['errors'];
 } {
   const result = ConfigurationSchema.safeParse(config);
@@ -167,7 +167,7 @@ export function validateConfiguration(config: unknown): {
  */
 export async function loadConfiguration(
   configOrPath: string | Record<string, unknown>
-): Promise<RatCageConfig> {
+): Promise<CageToolsConfig> {
   let config: unknown;
 
   if (typeof configOrPath === 'string') {
@@ -237,10 +237,10 @@ function resolveEnvironmentVariables(config: unknown): unknown {
  * Merge multiple configurations with priority
  */
 export function mergeConfigurations(
-  ...configs: Partial<RatCageConfig>[]
-): RatCageConfig {
+  ...configs: Partial<CageToolsConfig>[]
+): CageToolsConfig {
   // Start with a base that has required fields
-  const base: Partial<RatCageConfig> = {
+  const base: Partial<CageToolsConfig> = {
     providers: [],
   };
 

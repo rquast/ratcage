@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { RatCageConfig } from '../../config/schema';
+import type { CageToolsConfig } from '../../config/schema';
 import {
   ConfigurationSchema,
   ProviderConfigSchema,
@@ -211,7 +211,7 @@ describe('Configuration Schema', () => {
     it('should validate valid session config', () => {
       const config = {
         persistence: true,
-        storageDir: '~/.ratcage/sessions',
+        storageDir: '~/.cagetools/sessions',
         maxSessions: 10,
         sessionTimeout: 3600000, // 1 hour
         autoSave: true,
@@ -234,16 +234,16 @@ describe('Configuration Schema', () => {
       const result = SessionConfigSchema.safeParse(config);
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.storageDir).toBe('~/.ratcage/sessions');
+        expect(result.data.storageDir).toBe('~/.cagetools/sessions');
         expect(result.data.maxSessions).toBe(100);
         expect(result.data.autoSave).toBe(true);
       }
     });
   });
 
-  describe('Complete RatCage Configuration', () => {
+  describe('Complete CageTools Configuration', () => {
     it('should validate complete configuration', () => {
-      const config: RatCageConfig = {
+      const config: CageToolsConfig = {
         version: '1.0.0',
         defaultProvider: 'claude-code',
         providers: [

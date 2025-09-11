@@ -353,14 +353,24 @@ export class PermissionManager {
       case 'equals':
         return contextValue === condition.value;
       case 'startsWith':
-        return contextValue.startsWith(condition.value);
+        return typeof condition.value === 'string'
+          ? contextValue.startsWith(condition.value)
+          : condition.value.some(v => contextValue.startsWith(v));
       case 'endsWith':
-        return contextValue.endsWith(condition.value);
+        return typeof condition.value === 'string'
+          ? contextValue.endsWith(condition.value)
+          : condition.value.some(v => contextValue.endsWith(v));
       case 'contains':
-        return contextValue.includes(condition.value);
+        return typeof condition.value === 'string'
+          ? contextValue.includes(condition.value)
+          : condition.value.some(v => contextValue.includes(v));
       case 'regex':
         try {
-          return new RegExp(condition.value).test(contextValue);
+          const pattern =
+            typeof condition.value === 'string'
+              ? condition.value
+              : condition.value.join('|');
+          return new RegExp(pattern).test(contextValue);
         } catch {
           return false;
         }
@@ -559,4 +569,4 @@ export type {
   PermissionResult,
 } from './types/permissions';
 
-export type { PermissionPolicy, PermissionRule, PermissionCondition };
+// PermissionPolicy, PermissionRule, and PermissionCondition are already exported above as interfaces

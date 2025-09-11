@@ -21,7 +21,7 @@ describe('CLI Integration Tests', () => {
 
   beforeEach(async () => {
     // Create temporary directory for test files
-    tempDir = join(tmpdir(), `ratcage-test-${Date.now()}`);
+    tempDir = join(tmpdir(), `cagetools-test-${Date.now()}`);
     await fs.mkdir(tempDir, { recursive: true });
 
     // Setup test file paths
@@ -72,7 +72,7 @@ describe('CLI Integration Tests', () => {
   describe('Configuration Loading', () => {
     it('should load configuration from real file', async () => {
       // Test loading configuration from actual file system
-      process.env.RATCAGE_CONFIG = configFile;
+      process.env.CAGETOOLS_CONFIG = configFile;
 
       const mockArgs = ['config', 'list'];
 
@@ -90,13 +90,13 @@ describe('CLI Integration Tests', () => {
         expect(output).toContain('No configuration values set');
       } finally {
         console.log = originalLog;
-        delete process.env.RATCAGE_CONFIG;
+        delete process.env.CAGETOOLS_CONFIG;
       }
     });
 
     it('should handle missing configuration file gracefully', async () => {
       const nonExistentConfig = join(tempDir, 'missing.json');
-      process.env.RATCAGE_CONFIG = nonExistentConfig;
+      process.env.CAGETOOLS_CONFIG = nonExistentConfig;
 
       let errorOutput = '';
       const originalWrite = process.stderr.write;
@@ -113,7 +113,7 @@ describe('CLI Integration Tests', () => {
         expect(errorOutput.length).toBeGreaterThanOrEqual(0);
       } finally {
         process.stderr.write = originalWrite;
-        delete process.env.RATCAGE_CONFIG;
+        delete process.env.CAGETOOLS_CONFIG;
       }
     });
 
@@ -127,7 +127,7 @@ describe('CLI Integration Tests', () => {
       const invalidConfigFile = join(tempDir, 'invalid.json');
       await fs.writeFile(invalidConfigFile, JSON.stringify(invalidConfig));
 
-      process.env.RATCAGE_CONFIG = invalidConfigFile;
+      process.env.CAGETOOLS_CONFIG = invalidConfigFile;
 
       let output = '';
       const originalStderrWrite = process.stderr.write;
@@ -150,7 +150,7 @@ describe('CLI Integration Tests', () => {
       } finally {
         process.stderr.write = originalStderrWrite;
         console.log = originalLog;
-        delete process.env.RATCAGE_CONFIG;
+        delete process.env.CAGETOOLS_CONFIG;
       }
     });
   });
