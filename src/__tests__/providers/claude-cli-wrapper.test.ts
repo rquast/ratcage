@@ -1,80 +1,102 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { ChildProcess } from 'child_process';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
+import { existsSync } from 'fs';
 import { ClaudeCodeProvider } from '../../providers/claude-code.js';
 import type { StreamChunk } from '../../types/provider.js';
 
 // Mock child_process
 vi.mock('child_process', () => ({
   spawn: vi.fn(),
+  execSync: vi.fn(),
+}));
+
+// Mock fs
+vi.mock('fs', () => ({
+  existsSync: vi.fn(),
 }));
 
 const mockedSpawn = vi.mocked(spawn);
+const mockedExecSync = vi.mocked(execSync);
+const mockedExistsSync = vi.mocked(existsSync);
 
 // Helper to create a mock readable stream that works with both event-based and async iteration
 function createMockReadable(data: string | Buffer): NodeJS.ReadableStream {
-  const listeners: { [key: string]: Function[] } = {};
+  const bufferData = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  let position = 0;
+  const chunkSize = 1024; // Simulate chunked reading
 
   const stream = {
-    on: vi.fn((event: string, callback: Function) => {
-      if (!listeners[event]) {
-        listeners[event] = [];
+    readable: true,
+    read: vi.fn(),
+    setEncoding: vi.fn(),
+    pause: vi.fn(),
+    resume: vi.fn(),
+    isPaused: vi.fn(() => false),
+    pipe: vi.fn(),
+    unpipe: vi.fn(),
+    unshift: vi.fn(),
+    wrap: vi.fn(),
+    push: vi.fn(),
+    _destroy: vi.fn(),
+    addListener: vi.fn(),
+    emit: vi.fn(),
+    on: vi.fn(),
+    once: vi.fn(),
+    prependListener: vi.fn(),
+    prependOnceListener: vi.fn(),
+    removeListener: vi.fn(),
+    removeAllListeners: vi.fn(),
+    setMaxListeners: vi.fn(),
+    getMaxListeners: vi.fn(() => 10),
+    listeners: vi.fn(() => []),
+    rawListeners: vi.fn(() => []),
+    listenerCount: vi.fn(() => 0),
+    eventNames: vi.fn(() => []),
+    off: vi.fn(),
+    // For async iteration - emit data in chunks like a real stream
+    [Symbol.asyncIterator]: async function* () {
+      while (position < bufferData.length) {
+        const end = Math.min(position + chunkSize, bufferData.length);
+        const chunk = bufferData.subarray(position, end);
+        position = end;
+        yield chunk;
       }
-      listeners[event].push(callback as () => void);
-
-      // Emit data immediately when listener is attached
-      if (event === 'data') {
-        setImmediate(() => {
-          callback(Buffer.from(data));
-          // Emit end after data
-          const endListeners = listeners['end'] || [];
-          endListeners.forEach(cb => cb());
-        });
-      }
-      return stream;
-    }),
-    once: vi.fn((event: string, callback: Function) => {
-      stream.on(event, callback);
-      return stream;
-    }),
-    removeListener: vi.fn(() => stream),
-    // For async iteration
-    async *[Symbol.asyncIterator]() {
-      yield Buffer.from(data);
     },
-  };
+  } as NodeJS.ReadableStream;
 
-  // Return a Vitest mock function that satisfies the interface
-  return vi.fn().mockReturnValue(stream)() as NodeJS.ReadableStream;
+  return stream;
 }
 
 // Helper to create a mock process that satisfies ChildProcess interface
 function createMockProcess(overrides: {
   stdin?: Partial<NodeJS.WritableStream>;
-  stdout?: Partial<NodeJS.ReadableStream>;
-  stderr?: Partial<NodeJS.ReadableStream>;
+  stdout?: Partial<NodeJS.ReadableStream> | NodeJS.ReadableStream | unknown;
+  stderr?: Partial<NodeJS.ReadableStream> | unknown;
   on?: (event: string, callback: Function) => void;
   once?: (event: string, callback: Function) => void;
   kill?: () => void;
   pid?: number;
 }): ChildProcess {
+  // If stdout is provided, use it; otherwise create a default mock
+  const stdout = overrides.stdout ?? {
+    on: vi.fn(),
+    once: vi.fn(),
+    removeListener: vi.fn(),
+  };
+
+  const stderr = overrides.stderr ?? {
+    on: vi.fn(),
+    removeListener: vi.fn(),
+  };
+
   const mockProcess = {
-    stdin: {
+    stdin: overrides.stdin ?? {
       write: vi.fn(),
       end: vi.fn(),
-      ...overrides.stdin,
     },
-    stdout: {
-      on: vi.fn(),
-      once: vi.fn(),
-      removeListener: vi.fn(),
-      ...overrides.stdout,
-    },
-    stderr: {
-      on: vi.fn(),
-      removeListener: vi.fn(),
-      ...overrides.stderr,
-    },
+    stdout,
+    stderr,
     on: overrides.on ?? vi.fn(),
     once: overrides.once ?? vi.fn(),
     removeListener: vi.fn(),
@@ -91,19 +113,27 @@ function createMockProcess(overrides: {
 describe('ClaudeCodeProvider CLI Wrapper', () => {
   let provider: ClaudeCodeProvider;
 
-  // Helper to create 'which claude' mock process
-  const createWhichMock = (found = true) =>
-    createMockProcess({
-      on: vi.fn((event, callback) => {
-        if (event === 'close') {
-          callback(found ? 0 : 1);
-        }
-      }),
-    });
-
   beforeEach(() => {
     provider = new ClaudeCodeProvider();
     vi.clearAllMocks();
+
+    // Setup default mocks for the new detection logic
+    // Mock 'which claude' to succeed by default
+    mockedExecSync.mockImplementation((cmd: string) => {
+      if (cmd === 'which claude') {
+        return '/usr/local/bin/claude\n';
+      }
+      if (cmd.includes('--version')) {
+        return 'Claude Code 0.1.0';
+      }
+      return '';
+    });
+
+    // Mock existsSync to return true for the mocked path
+    mockedExistsSync.mockImplementation(path => {
+      const pathStr = typeof path === 'string' ? path : path.toString();
+      return pathStr === '/usr/local/bin/claude';
+    });
   });
 
   afterEach(async () => {
@@ -112,7 +142,17 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
 
   describe('CLI Process Management', () => {
     it('should spawn claude CLI process on query', async () => {
-      const mockStdout = createMockReadable('Hello from Claude');
+      const mockData = 'Hello from Claude';
+      const mockStdout = {
+        on: vi.fn((event: string, callback: Function) => {
+          if (event === 'data') {
+            // Simulate data emission for non-streaming mode
+            setImmediate(() => callback(Buffer.from(mockData)));
+          }
+        }),
+        once: vi.fn(),
+        removeListener: vi.fn(),
+      };
       const mockProcess = createMockProcess({
         stdout: mockStdout,
         on: vi.fn((event, callback) => {
@@ -122,20 +162,19 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         }),
       });
 
-      // First call is 'which claude', second is actual claude command
-      mockedSpawn
-        .mockReturnValueOnce(createWhichMock(true))
-        .mockReturnValueOnce(mockProcess);
+      // Now spawn is only called for the actual claude command
+      mockedSpawn.mockReturnValueOnce(mockProcess);
 
       await provider.initialize({});
 
       const chunks: StreamChunk[] = [];
+      // Note: without stream option, it uses non-streaming mode
       for await (const chunk of provider.query('Hello')) {
         chunks.push(chunk);
       }
 
       expect(spawn).toHaveBeenCalledWith(
-        'claude',
+        '/usr/local/bin/claude',
         [
           '--print',
           '--output-format=stream-json',
@@ -146,7 +185,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         expect.any(Object)
       );
       expect(chunks.length).toBeGreaterThan(0);
-      expect(chunks[0].content).toContain('Hello from Claude');
+      expect(chunks[0].content).toBe(mockData);
     });
 
     it('should pass API key through environment variable', async () => {
@@ -159,16 +198,14 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         }),
       });
 
-      mockedSpawn
-        .mockReturnValueOnce(createWhichMock(true))
-        .mockReturnValueOnce(mockProcess);
+      mockedSpawn.mockReturnValueOnce(mockProcess);
 
       await provider.initialize({});
       await provider.query('Test').next();
 
       // Claude Code CLI uses OAuth authentication
       expect(spawn).toHaveBeenCalledWith(
-        'claude',
+        '/usr/local/bin/claude',
         [
           '--print',
           '--output-format=stream-json',
@@ -181,9 +218,22 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
     });
 
     it('should handle CLI process errors', async () => {
+      const errorMessage = 'Error: Invalid API key';
+      const mockStderr = {
+        on: vi.fn((event: string, callback: Function) => {
+          if (event === 'data') {
+            setImmediate(() => callback(Buffer.from(errorMessage)));
+          }
+        }),
+        removeListener: vi.fn(),
+      };
       const mockProcess = createMockProcess({
-        stdout: createMockReadable(''),
-        stderr: createMockReadable('Error: Invalid API key'),
+        stdout: {
+          on: vi.fn(),
+          once: vi.fn(),
+          removeListener: vi.fn(),
+        },
+        stderr: mockStderr,
         on: vi.fn((event, callback) => {
           if (event === 'close') {
             // Exit with error code after streams have been processed
@@ -192,9 +242,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         }),
       });
 
-      mockedSpawn
-        .mockReturnValueOnce(createWhichMock(true))
-        .mockReturnValueOnce(mockProcess);
+      mockedSpawn.mockReturnValueOnce(mockProcess);
 
       await provider.initialize({});
 
@@ -203,6 +251,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         for await (const chunk of provider.query('Test')) {
           chunks.push(chunk);
         }
+        expect.fail('Should have thrown an error');
       } catch (error) {
         expect(error).toBeDefined();
         expect((error as Error).message).toContain(
@@ -225,9 +274,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         }),
       });
 
-      mockedSpawn
-        .mockReturnValueOnce(createWhichMock(true))
-        .mockReturnValueOnce(mockProcess);
+      mockedSpawn.mockReturnValueOnce(mockProcess);
 
       await provider.initialize({});
 
@@ -258,9 +305,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         }),
       });
 
-      mockedSpawn
-        .mockReturnValueOnce(createWhichMock(true))
-        .mockReturnValueOnce(mockProcess);
+      mockedSpawn.mockReturnValueOnce(mockProcess);
 
       await provider.initialize({});
 
@@ -270,7 +315,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
       }
 
       expect(spawn).toHaveBeenCalledWith(
-        'claude',
+        '/usr/local/bin/claude',
         [
           '--print',
           '--output-format=stream-json',
@@ -288,8 +333,18 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
     });
 
     it('should handle tool execution through CLI', async () => {
+      const mockData = 'Tool executed successfully';
+      const mockStdout = {
+        on: vi.fn((event: string, callback: Function) => {
+          if (event === 'data') {
+            setImmediate(() => callback(Buffer.from(mockData)));
+          }
+        }),
+        once: vi.fn(),
+        removeListener: vi.fn(),
+      };
       const mockProcess = createMockProcess({
-        stdout: createMockReadable('Tool executed successfully'),
+        stdout: mockStdout,
         on: vi.fn((event, callback) => {
           if (event === 'close') {
             setImmediate(() => callback(0));
@@ -297,9 +352,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         }),
       });
 
-      mockedSpawn
-        .mockReturnValueOnce(createWhichMock(true))
-        .mockReturnValueOnce(mockProcess);
+      mockedSpawn.mockReturnValueOnce(mockProcess);
 
       await provider.initialize({});
 
@@ -324,7 +377,15 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
 
     it('should maintain persistent session with proper session ID and continue flags', async () => {
       const mockProcess1 = createMockProcess({
-        stdout: createMockReadable('First response'),
+        stdout: {
+          on: vi.fn((event: string, callback: Function) => {
+            if (event === 'data') {
+              setImmediate(() => callback(Buffer.from('First response')));
+            }
+          }),
+          once: vi.fn(),
+          removeListener: vi.fn(),
+        },
         on: vi.fn((event, callback) => {
           if (event === 'close') {
             setImmediate(() => callback(0));
@@ -333,7 +394,15 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
       });
 
       const mockProcess2 = createMockProcess({
-        stdout: createMockReadable('Second response'),
+        stdout: {
+          on: vi.fn((event: string, callback: Function) => {
+            if (event === 'data') {
+              setImmediate(() => callback(Buffer.from('Second response')));
+            }
+          }),
+          once: vi.fn(),
+          removeListener: vi.fn(),
+        },
         on: vi.fn((event, callback) => {
           if (event === 'close') {
             setImmediate(() => callback(0));
@@ -342,7 +411,6 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
       });
 
       mockedSpawn
-        .mockReturnValueOnce(createWhichMock(true))
         .mockReturnValueOnce(mockProcess1)
         .mockReturnValueOnce(mockProcess2);
 
@@ -367,8 +435,8 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
 
       // Verify first call uses session ID
       expect(spawn).toHaveBeenNthCalledWith(
-        2,
-        'claude',
+        1,
+        '/usr/local/bin/claude',
         [
           '--print',
           '--output-format=stream-json',
@@ -383,8 +451,8 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
 
       // Verify second call uses continue
       expect(spawn).toHaveBeenNthCalledWith(
-        3,
-        'claude',
+        2,
+        '/usr/local/bin/claude',
         [
           '--print',
           '--output-format=stream-json',
@@ -396,14 +464,17 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         expect.any(Object)
       );
 
-      expect(spawn).toHaveBeenCalledTimes(3); // 1 for which, 2 for queries
+      expect(spawn).toHaveBeenCalledTimes(2); // 2 for queries (no which check anymore)
       expect(chunks1[0].content).toContain('First response');
       expect(chunks2[0].content).toContain('Second response');
     });
 
     it('should handle CLI not found error', async () => {
-      // Mock 'which claude' to return not found
-      mockedSpawn.mockReturnValueOnce(createWhichMock(false));
+      // Mock that claude is not found
+      mockedExecSync.mockImplementation(() => {
+        throw new Error('command not found');
+      });
+      mockedExistsSync.mockReturnValue(false);
 
       await expect(provider.initialize({})).rejects.toThrow(
         'Claude Code CLI not found'
@@ -426,9 +497,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         }),
       });
 
-      mockedSpawn
-        .mockReturnValueOnce(createWhichMock(true))
-        .mockReturnValueOnce(mockProcess);
+      mockedSpawn.mockReturnValueOnce(mockProcess);
 
       await provider.initialize({});
 
@@ -447,7 +516,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
     });
 
     it('should handle session destruction properly', async () => {
-      mockedSpawn.mockReturnValueOnce(createWhichMock(true));
+      // No need to mock 'which' anymore as it's handled in beforeEach
 
       await provider.initialize({});
 
@@ -474,9 +543,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         }),
       });
 
-      mockedSpawn
-        .mockReturnValueOnce(createWhichMock(true))
-        .mockReturnValueOnce(mockProcess);
+      mockedSpawn.mockReturnValueOnce(mockProcess);
 
       await provider.initialize({});
 
@@ -487,7 +554,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
 
       // Should still use streaming format for full Claude Code experience
       expect(spawn).toHaveBeenCalledWith(
-        'claude',
+        '/usr/local/bin/claude',
         [
           '--print',
           '--output-format=stream-json',
@@ -516,7 +583,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
     });
 
     it('should handle multiple concurrent sessions', async () => {
-      mockedSpawn.mockReturnValueOnce(createWhichMock(true));
+      // No need to mock 'which' anymore as it's handled in beforeEach
 
       await provider.initialize({});
 
@@ -532,7 +599,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
     });
 
     it('should clear all sessions on disconnect', async () => {
-      mockedSpawn.mockReturnValueOnce(createWhichMock(true));
+      // No need to mock 'which' anymore as it's handled in beforeEach
 
       await provider.initialize({});
 

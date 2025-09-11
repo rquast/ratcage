@@ -1,5 +1,8 @@
 import type { ChildProcess } from 'child_process';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
+import { existsSync } from 'fs';
+import { homedir, platform } from 'os';
+import { join } from 'path';
 import type {
   Provider,
   ProviderCapabilities,
@@ -25,6 +28,7 @@ export class ClaudeCodeProvider implements Provider {
 
   private claudeProcess?: ChildProcess;
   private config?: ProviderConfig;
+  private claudePath?: string;
   private activeSessions = new Map<
     string,
     { sessionId: string; isFirst: boolean }
@@ -34,19 +38,172 @@ export class ClaudeCodeProvider implements Provider {
     // Store config for use in query method
     this.config = config;
 
-    // Check if claude CLI is available
-    return new Promise((resolve, reject) => {
-      const checkProcess = spawn('which', ['claude']);
-      checkProcess.on('close', code => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(
-            new Error('Claude Code CLI not found. Please install it first.')
-          );
+    // Try to find Claude Code in various locations
+    this.claudePath = await this.findClaudePath();
+
+    if (!this.claudePath) {
+      throw new Error(
+        'Claude Code CLI not found. Please install it first. ' +
+          'Visit https://docs.anthropic.com/en/docs/claude-code/setup for installation instructions.'
+      );
+    }
+  }
+
+  private async findClaudePath(): Promise<string | undefined> {
+    const home = homedir();
+    const isWindows = platform() === 'win32';
+
+    // Common installation paths to check
+    const pathsToCheck: string[] = [
+      // Check if 'claude' is directly in PATH first
+      'claude',
+
+      // Local installation (new standard location after migration)
+      join(home, '.claude', 'local', 'claude'),
+
+      // User bin directories (standard installer locations)
+      join(home, '.local', 'bin', 'claude'),
+
+      // NPM global installations
+      join(home, '.npm-global', 'bin', 'claude'),
+
+      // Common system paths
+      '/usr/local/bin/claude',
+      '/usr/bin/claude',
+      '/opt/claude/bin/claude',
+
+      // Homebrew on macOS
+      '/opt/homebrew/bin/claude',
+      '/usr/local/Homebrew/bin/claude',
+    ];
+
+    // Check CLAUDE_CONFIG_DIR environment variable
+    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    if (claudeConfigDir) {
+      pathsToCheck.unshift(join(claudeConfigDir, 'local', 'claude'));
+    }
+
+    // First, try the simple 'which' command for PATH-accessible claude
+    try {
+      const whichResult = execSync('which claude', {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      }).trim();
+      if (whichResult && existsSync(whichResult)) {
+        return whichResult;
+      }
+    } catch {
+      // 'which' failed, continue checking other locations
+    }
+
+    // Check each potential path
+    for (const path of pathsToCheck) {
+      if (path === 'claude') {
+        continue; // Skip, already checked with 'which'
+      }
+
+      if (existsSync(path)) {
+        // Verify it's executable by trying to get version
+        try {
+          execSync(`"${path}" --version`, {
+            encoding: 'utf8',
+            stdio: ['pipe', 'pipe', 'ignore'],
+            timeout: 5000,
+          });
+          return path;
+        } catch {
+          // Not executable or not valid Claude binary
+          continue;
         }
-      });
-    });
+      }
+    }
+
+    // Check shell configuration files for aliases (Mac/Linux)
+    if (!isWindows) {
+      const shellConfigs = [
+        '.zshrc',
+        '.bashrc',
+        '.bash_profile',
+        '.profile',
+        '.config/fish/config.fish',
+      ];
+
+      for (const configFile of shellConfigs) {
+        const configPath = join(home, configFile);
+        if (existsSync(configPath)) {
+          try {
+            const content = execSync(`cat "${configPath}"`, {
+              encoding: 'utf8',
+            });
+
+            // Look for alias definitions
+            const aliasMatch = content.match(
+              /alias\s+claude=["']?([^"'\n]+)["']?/m
+            );
+            if (aliasMatch) {
+              let aliasPath = aliasMatch[1];
+              // Expand ~ to home directory
+              aliasPath = aliasPath.replace(/^~/, home);
+              // Remove any shell variables like $HOME
+              aliasPath = aliasPath.replace(/\$HOME/g, home);
+
+              if (existsSync(aliasPath)) {
+                try {
+                  execSync(`"${aliasPath}" --version`, {
+                    encoding: 'utf8',
+                    stdio: ['pipe', 'pipe', 'ignore'],
+                    timeout: 5000,
+                  });
+                  return aliasPath;
+                } catch {
+                  // Not valid Claude binary
+                }
+              }
+            }
+
+            // Look for PATH exports that might contain claude
+            const pathMatches = content.match(
+              /export\s+PATH=["']?([^"'\n]+)["']?/gm
+            );
+            if (pathMatches) {
+              for (const pathMatch of pathMatches) {
+                const pathValue = pathMatch
+                  .replace(/export\s+PATH=["']?/, '')
+                  .replace(/["']?$/, '');
+                const paths = pathValue.split(':');
+                for (let pathDir of paths) {
+                  // Expand variables
+                  pathDir = pathDir
+                    .replace(/^~/, home)
+                    .replace(/\$HOME/g, home);
+                  if (pathDir.includes('$PATH')) {
+                    continue; // Skip PATH references
+                  }
+
+                  const claudeInPath = join(pathDir, 'claude');
+                  if (existsSync(claudeInPath)) {
+                    try {
+                      execSync(`"${claudeInPath}" --version`, {
+                        encoding: 'utf8',
+                        stdio: ['pipe', 'pipe', 'ignore'],
+                        timeout: 5000,
+                      });
+                      return claudeInPath;
+                    } catch {
+                      // Not valid
+                    }
+                  }
+                }
+              }
+            }
+          } catch {
+            // Error reading config file, continue
+          }
+        }
+      }
+    }
+
+    return undefined;
   }
 
   async *query(
@@ -102,7 +259,7 @@ export class ClaudeCodeProvider implements Provider {
     // Add the prompt as the last argument
     args.push(prompt);
 
-    const claudeProcess = spawn('claude', args, {
+    const claudeProcess = spawn(this.claudePath ?? 'claude', args, {
       stdio: ['inherit', 'pipe', 'pipe'],
       env: { ...process.env },
       timeout: this.config?.timeout,
