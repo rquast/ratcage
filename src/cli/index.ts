@@ -327,6 +327,11 @@ export class CLI {
 
       if (input.toLowerCase() === 'clear') {
         console.clear();
+        // Clear the session to reset conversation history
+        if (session) {
+          session.messages = [];
+          session.state = {};
+        }
         showPrompt();
         return;
       }
