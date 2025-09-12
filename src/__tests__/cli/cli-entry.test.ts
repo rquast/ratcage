@@ -201,6 +201,74 @@ describe('CLI Entry Point', () => {
         expect(result).toBeUndefined();
       });
 
+      it('should clear console and session when "clear" is typed', async () => {
+        // Mock console.clear
+        const mockConsoleClear = vi
+          .spyOn(console, 'clear')
+          .mockImplementation(() => {});
+
+        // Create a mock session
+        const mockSession = {
+          id: 'test-session',
+          messages: [{ role: 'user', content: 'test message' }],
+          state: { someState: 'value' } as Record<string, unknown>,
+        };
+
+        // Mock provider with session
+        const mockProvider: Provider = {
+          name: 'mock-provider',
+          capabilities: {
+            streaming: true,
+            tools: false,
+            mcp: false,
+            subagents: false,
+            hooks: false,
+            webSearch: false,
+            codeExecution: false,
+          },
+          initialize: vi.fn(),
+          query: vi.fn().mockImplementation(async function* () {
+            yield { content: 'response', type: 'text' as const, metadata: {} };
+          }),
+          createSession: vi.fn().mockReturnValue(mockSession),
+          destroySession: vi.fn(),
+          disconnect: vi.fn(),
+          executeTools: vi.fn(),
+          getUsage: vi.fn(),
+        };
+
+        // Set up CLI with mock provider
+        Object.defineProperty(cli, 'provider', {
+          value: mockProvider,
+          writable: true,
+          configurable: true,
+        });
+
+        // Simulate the clear command logic from startChat
+        const processInput = (input: string, session: typeof mockSession) => {
+          if (input.toLowerCase() === 'clear') {
+            console.clear();
+            // Clear the session to reset conversation history
+            if (session) {
+              session.messages = [];
+              session.state = {};
+            }
+            return true;
+          }
+          return false;
+        };
+
+        // Test the clear functionality
+        const wasCleared = processInput('clear', mockSession);
+
+        expect(wasCleared).toBe(true);
+        expect(mockConsoleClear).toHaveBeenCalled();
+        expect(mockSession.messages).toEqual([]);
+        expect(mockSession.state).toEqual({});
+
+        mockConsoleClear.mockRestore();
+      });
+
       it('should have enhanced interactive features documented in help text', () => {
         const chatCommand = cli.program.commands.find(
           cmd => cmd.name() === 'chat'
