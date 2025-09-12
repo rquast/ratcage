@@ -11,7 +11,7 @@
 - ❌ **NEVER** use `any` type - use proper types always
 - ❌ **NEVER** use `require()` - only ES6 `import`/`export`
 - ❌ **NEVER** use CommonJS syntax (`module.exports`, `__dirname`, `__filename`)
-- ❌ **NEVER** omit `.js` extensions in imports (`import './file'` → `import './file.js'`)
+- ❌ **NEVER** use file extensions in TypeScript imports (`import './file.ts'` or `import './file.js'` → `import './file'`)
 - ❌ **NEVER** use `var` - only `const`/`let`
 - ❌ **NEVER** use `==` or `!=` - only `===` and `!==`
 - ❌ **NEVER** skip curly braces: `if (x) doSomething()` → `if (x) { doSomething() }`
@@ -19,7 +19,7 @@
 **Import Violations:**
 
 - ❌ **NEVER** write: `import { Type } from './types'` when only using as type
-- ✅ **ALWAYS** write: `import type { Type } from './types.js'`
+- ✅ **ALWAYS** write: `import type { Type } from './types'`
 
 **Interface Violations:**
 
@@ -107,7 +107,7 @@ console.log('Operation completed');
 
 ### PROJECT-SPECIFIC REQUIREMENTS
 
-**File Extensions:** All local imports MUST use `.js` extensions for ES module compatibility
+**File Extensions:** TypeScript imports should NOT include file extensions - the TypeScript compiler handles this
 
 **Winston Logger:** Use custom ConsoleTransport for proper console method calling in tests
 
