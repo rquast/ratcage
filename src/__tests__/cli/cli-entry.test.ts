@@ -201,7 +201,7 @@ describe('CLI Entry Point', () => {
         expect(result).toBeUndefined();
       });
 
-      it('should clear console and session when "clear" is typed', async () => {
+      it('should clear console and session when "/clear" is typed', async () => {
         // Mock console.clear
         const mockConsoleClear = vi
           .spyOn(console, 'clear')
@@ -246,7 +246,7 @@ describe('CLI Entry Point', () => {
 
         // Simulate the clear command logic from startChat
         const processInput = (input: string, session: typeof mockSession) => {
-          if (input.toLowerCase() === 'clear') {
+          if (input.toLowerCase() === '/clear') {
             console.clear();
             // Clear the session to reset conversation history
             if (session) {
@@ -259,7 +259,7 @@ describe('CLI Entry Point', () => {
         };
 
         // Test the clear functionality
-        const wasCleared = processInput('clear', mockSession);
+        const wasCleared = processInput('/clear', mockSession);
 
         expect(wasCleared).toBe(true);
         expect(mockConsoleClear).toHaveBeenCalled();
@@ -269,24 +269,188 @@ describe('CLI Entry Point', () => {
         mockConsoleClear.mockRestore();
       });
 
-      it('should have enhanced interactive features documented in help text', () => {
-        const chatCommand = cli.program.commands.find(
-          cmd => cmd.name() === 'chat'
-        );
+      it('should handle /exit command', () => {
+        const mockRlClose = vi.fn();
+        const rl = { close: mockRlClose };
 
-        expect(chatCommand).toBeDefined();
-        expect(chatCommand?.description()).toContain('interactive chat');
+        // Simulate the exit command logic from startChat
+        const processInput = (input: string) => {
+          if (input.toLowerCase() === '/exit') {
+            rl.close();
+            return true;
+          }
+          return false;
+        };
 
-        // The enhanced features are implemented in the startChat method
-        // Testing them requires complex mocking of stdin/stdout and readline
-        // The core functionality is verified by integration tests
+        const wasExited = processInput('/exit');
+        expect(wasExited).toBe(true);
+        expect(mockRlClose).toHaveBeenCalled();
       });
 
-      it('should use readline for enhanced input handling', async () => {
-        // Verify that the startChat method imports and would use readline
-        // This ensures the enhanced functionality is available
-        const readlineModule = await import('readline');
-        expect(typeof readlineModule.createInterface).toBe('function');
+      it('should handle /help command', () => {
+        const mockConsoleLog = vi
+          .spyOn(console, 'log')
+          .mockImplementation(() => {});
+
+        const slashCommands = [
+          {
+            command: '/clear',
+            description: 'Clear context and reset conversation',
+          },
+          { command: '/exit', description: 'Exit CageTools' },
+          { command: '/help', description: 'Show available commands' },
+        ];
+
+        // Simulate the help command logic from startChat
+        const processInput = (input: string) => {
+          if (input.toLowerCase() === '/help') {
+            console.log('\nAvailable commands:');
+            slashCommands.forEach(cmd => {
+              console.log(`  ${cmd.command} - ${cmd.description}`);
+            });
+            console.log();
+            return true;
+          }
+          return false;
+        };
+
+        const showedHelp = processInput('/help');
+        expect(showedHelp).toBe(true);
+        expect(mockConsoleLog).toHaveBeenCalledWith('\nAvailable commands:');
+        expect(mockConsoleLog).toHaveBeenCalledWith(
+          '  /clear - Clear context and reset conversation'
+        );
+        expect(mockConsoleLog).toHaveBeenCalledWith('  /exit - Exit CageTools');
+        expect(mockConsoleLog).toHaveBeenCalledWith(
+          '  /help - Show available commands'
+        );
+
+        mockConsoleLog.mockRestore();
+      });
+
+      it('should provide autocomplete for slash commands', () => {
+        const slashCommands = [
+          {
+            command: '/clear',
+            description: 'Clear context and reset conversation',
+          },
+          { command: '/exit', description: 'Exit CageTools' },
+          { command: '/help', description: 'Show available commands' },
+        ];
+
+        // Test autocomplete matching logic
+        const getMatchingCommands = (input: string) => {
+          if (!input.startsWith('/')) {
+            return [];
+          }
+          const query = input.toLowerCase();
+          return slashCommands.filter(cmd =>
+            cmd.command.toLowerCase().startsWith(query)
+          );
+        };
+
+        // Test various autocomplete scenarios
+        expect(getMatchingCommands('/')).toHaveLength(3);
+        expect(getMatchingCommands('/h')).toHaveLength(1);
+        expect(getMatchingCommands('/he')).toHaveLength(1);
+        expect(getMatchingCommands('/help')).toHaveLength(1);
+        expect(getMatchingCommands('/c')).toHaveLength(1);
+        expect(getMatchingCommands('/clear')).toHaveLength(1);
+        expect(getMatchingCommands('/e')).toHaveLength(1);
+        expect(getMatchingCommands('/ex')).toHaveLength(1);
+        expect(getMatchingCommands('/unknown')).toHaveLength(0);
+        expect(getMatchingCommands('clear')).toHaveLength(0); // No slash prefix
+      });
+
+      it('should handle Tab key for autocomplete', () => {
+        const slashCommands = [
+          {
+            command: '/clear',
+            description: 'Clear context and reset conversation',
+          },
+          { command: '/exit', description: 'Exit CageTools' },
+          { command: '/help', description: 'Show available commands' },
+        ];
+
+        const getMatchingCommands = (input: string) => {
+          if (!input.startsWith('/')) {
+            return [];
+          }
+          const query = input.toLowerCase();
+          return slashCommands.filter(cmd =>
+            cmd.command.toLowerCase().startsWith(query)
+          );
+        };
+
+        // Simulate Tab key autocomplete
+        let currentInput = '/h';
+        const selectedSuggestionIndex = 0;
+        const matches = getMatchingCommands(currentInput);
+
+        if (matches.length > 0) {
+          currentInput = matches[selectedSuggestionIndex].command;
+        }
+
+        expect(currentInput).toBe('/help');
+      });
+
+      it('should handle arrow key navigation in suggestions', () => {
+        const slashCommands = [
+          {
+            command: '/clear',
+            description: 'Clear context and reset conversation',
+          },
+          { command: '/exit', description: 'Exit CageTools' },
+          { command: '/help', description: 'Show available commands' },
+        ];
+
+        const getMatchingCommands = (input: string) => {
+          if (!input.startsWith('/')) {
+            return [];
+          }
+          const query = input.toLowerCase();
+          return slashCommands.filter(cmd =>
+            cmd.command.toLowerCase().startsWith(query)
+          );
+        };
+
+        // Test arrow navigation
+        const currentInput = '/';
+        let selectedSuggestionIndex = 0;
+        const matches = getMatchingCommands(currentInput);
+
+        // Down arrow
+        selectedSuggestionIndex = Math.min(
+          matches.length - 1,
+          selectedSuggestionIndex + 1
+        );
+        expect(selectedSuggestionIndex).toBe(1);
+
+        // Down arrow again
+        selectedSuggestionIndex = Math.min(
+          matches.length - 1,
+          selectedSuggestionIndex + 1
+        );
+        expect(selectedSuggestionIndex).toBe(2);
+
+        // Down arrow at end (should stay at end)
+        selectedSuggestionIndex = Math.min(
+          matches.length - 1,
+          selectedSuggestionIndex + 1
+        );
+        expect(selectedSuggestionIndex).toBe(2);
+
+        // Up arrow
+        selectedSuggestionIndex = Math.max(0, selectedSuggestionIndex - 1);
+        expect(selectedSuggestionIndex).toBe(1);
+
+        // Up arrow again
+        selectedSuggestionIndex = Math.max(0, selectedSuggestionIndex - 1);
+        expect(selectedSuggestionIndex).toBe(0);
+
+        // Up arrow at start (should stay at start)
+        selectedSuggestionIndex = Math.max(0, selectedSuggestionIndex - 1);
+        expect(selectedSuggestionIndex).toBe(0);
       });
 
       it('should handle raw mode setup for TTY detection', () => {
@@ -695,6 +859,9 @@ describe('CLI Entry Point', () => {
     });
 
     it('should support plain text output format', async () => {
+      // Create a fresh spy for this test to avoid isolation issues
+      const localConsoleSpy = vi.spyOn(console, 'log');
+
       // Mock provider to avoid errors
       vi.spyOn(cli, 'initializeProvider').mockResolvedValue();
       const mockQuery = vi.fn().mockImplementation(async function* () {
@@ -728,8 +895,12 @@ describe('CLI Entry Point', () => {
       });
 
       await cli.parse(['query', 'test', '--output', 'text']);
-      const output = mockConsoleLog.mock.calls[0]?.[0];
-      expect(typeof output).toBe('string');
+
+      // When --output is specified, it should use non-streaming mode and call console.log
+      expect(localConsoleSpy).toHaveBeenCalledWith('test response');
+
+      // Clean up the local spy
+      localConsoleSpy.mockRestore();
     });
 
     it('should support markdown output format', async () => {

@@ -8,6 +8,9 @@ export default defineConfig({
     environment: 'node',
     include: ['**/__tests__/**/*.test.ts', '**/__tests__/**/*.spec.ts'],
     exclude: ['node_modules', 'dist', 'build'],
+    // Use forks for better test isolation
+    pool: 'forks',
+    isolate: true, // Run each test file in isolation
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

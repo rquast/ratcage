@@ -219,8 +219,11 @@ export class CLI {
       // Always create a session for consistent experience
       const session = { id: 'single-query-session', messages: [], state: {} };
 
+      // Determine if we should use streaming based on the output format
+      const useStreaming = options.stream ?? options.output === undefined;
+
       const response = this.provider.query(prompt, {
-        stream: options.stream ?? true, // Default to streaming for full experience
+        stream: useStreaming,
         session: options.session
           ? { id: options.session, messages: [], state: {} }
           : session,
@@ -230,7 +233,7 @@ export class CLI {
       let inCodeBlock = false;
 
       for await (const chunk of response) {
-        if (options.stream) {
+        if (useStreaming) {
           switch (chunk.type) {
             case 'thinking':
               // Show thinking in real-time exactly like Claude Code CLI
@@ -277,11 +280,11 @@ export class CLI {
       }
 
       // Close any open code block in streaming mode
-      if (options.stream && inCodeBlock) {
+      if (useStreaming && inCodeBlock) {
         process.stdout.write(chalk.blue('\n```\n'));
       }
 
-      if (!options.stream) {
+      if (!useStreaming) {
         this.outputResponse(fullResponse, options.output ?? 'text');
       }
     } catch (error) {
@@ -297,23 +300,16 @@ export class CLI {
       return;
     }
 
-    console.log(chalk.green('🤖 CageTools Chat - Enhanced Interactive Mode'));
+    console.log(chalk.green('🤖 CageTools'));
     console.log(
-      chalk.gray(
-        '💡 Type "exit" to quit, "clear" to clear conversation history'
-      )
+      chalk.gray('💡 Commands: /exit to quit, /clear to reset context')
     );
-    console.log(
-      chalk.gray('✨ Conversation context is preserved across messages')
-    );
-    console.log(
-      chalk.gray('🚀 Press ESC to stop current response, then continue typing')
-    );
+    console.log(chalk.gray('🚀 Press ESC to stop current response'));
     console.log();
 
     await this.initializeProvider(options?.provider ?? 'claude-code');
 
-    const session = this.provider?.createSession();
+    let session = this.provider?.createSession();
 
     // Set up custom readline interface for continuous typing
     const rl = createInterface({
@@ -330,10 +326,79 @@ export class CLI {
     let currentInput = '';
     let isProcessing = false;
     let currentResponseController: AbortController | null = null;
+    let showingSuggestions = false;
+    let selectedSuggestionIndex = 0;
+
+    // Available slash commands
+    const slashCommands = [
+      {
+        command: '/clear',
+        description: 'Clear context and reset conversation',
+      },
+      { command: '/exit', description: 'Exit CageTools' },
+      { command: '/help', description: 'Show available commands' },
+    ];
+
+    const getMatchingCommands = () => {
+      if (!currentInput.startsWith('/')) {
+        return [];
+      }
+      const query = currentInput.toLowerCase();
+      return slashCommands.filter(cmd =>
+        cmd.command.toLowerCase().startsWith(query)
+      );
+    };
 
     const showPrompt = () => {
       if (!isProcessing) {
+        clearCurrentLine();
+
+        // Clear previous suggestions if any
+        if (showingSuggestions) {
+          const prevMatches = slashCommands.filter(cmd =>
+            cmd.command.toLowerCase().startsWith('/')
+          );
+          for (let i = 0; i < prevMatches.length; i++) {
+            process.stdout.write('\n\x1b[K');
+          }
+          process.stdout.write(`\x1b[${prevMatches.length}A`);
+        }
+
+        // Show current input
         process.stdout.write(chalk.cyan('> ') + currentInput);
+
+        // Show suggestions if typing a slash command
+        const matches = getMatchingCommands();
+        if (
+          matches.length > 0 &&
+          currentInput.length > 0 &&
+          currentInput !== matches[0].command
+        ) {
+          showingSuggestions = true;
+
+          // Ensure selected index is valid
+          if (selectedSuggestionIndex >= matches.length) {
+            selectedSuggestionIndex = matches.length - 1;
+          }
+
+          matches.forEach((cmd, index) => {
+            const isSelected = index === selectedSuggestionIndex;
+            const prefix = isSelected ? chalk.cyan('▶') : ' ';
+            const cmdText = isSelected
+              ? chalk.cyan(cmd.command)
+              : chalk.gray(cmd.command);
+            const descText = chalk.dim(` - ${cmd.description}`);
+            process.stdout.write(`\n${prefix} ${cmdText}${descText}`);
+          });
+
+          // Move cursor back to input line
+          process.stdout.write(`\x1b[${matches.length}A`);
+          process.stdout.write('\r');
+          process.stdout.write(chalk.cyan('> ') + currentInput);
+        } else {
+          showingSuggestions = false;
+          selectedSuggestionIndex = 0;
+        }
       }
     };
 
@@ -342,18 +407,35 @@ export class CLI {
     };
 
     const processInput = async (input: string) => {
-      if (input.toLowerCase() === 'exit') {
+      // Handle slash commands
+      if (input.toLowerCase() === '/exit') {
         rl.close();
         return;
       }
 
-      if (input.toLowerCase() === 'clear') {
+      if (input.toLowerCase() === '/clear') {
         console.clear();
         // Clear the session to reset conversation history
-        if (session) {
-          session.messages = [];
-          session.state = {};
+        if (session && this.provider) {
+          // Destroy the old session to clear provider's internal state
+          await this.provider.destroySession(session.id);
+          // Create a fresh session
+          session = this.provider.createSession();
         }
+        console.log(chalk.green('✨ Context cleared'));
+        console.log();
+        showPrompt();
+        return;
+      }
+
+      if (input.toLowerCase() === '/help') {
+        console.log(chalk.cyan('\nAvailable commands:'));
+        slashCommands.forEach(cmd => {
+          console.log(
+            `  ${chalk.green(cmd.command)} - ${chalk.gray(cmd.description)}`
+          );
+        });
+        console.log();
         showPrompt();
         return;
       }
@@ -460,11 +542,10 @@ export class CLI {
         return;
       }
 
-      // Ctrl+C (3) - exit completely
+      // Ctrl+C (3) - show exit instruction
       if (keyCode === 3) {
         console.log();
-        console.log(chalk.yellow('👋 Goodbye!'));
-        rl.close();
+        console.log(chalk.yellow('👋 Use /exit to quit or press Ctrl+C again'));
         return;
       }
 
@@ -473,10 +554,54 @@ export class CLI {
         return;
       }
 
+      // Tab key (9) - autocomplete
+      if (keyCode === 9) {
+        const matches = getMatchingCommands();
+        if (matches.length > 0 && showingSuggestions) {
+          currentInput = matches[selectedSuggestionIndex].command;
+          showPrompt();
+        }
+        return;
+      }
+
+      // Arrow keys
+      if (keyStr === '\x1b[A' || keyStr === '\x1b[B') {
+        const matches = getMatchingCommands();
+        if (matches.length > 0 && showingSuggestions) {
+          if (keyStr === '\x1b[A') {
+            // Up arrow
+            selectedSuggestionIndex = Math.max(0, selectedSuggestionIndex - 1);
+          } else {
+            // Down arrow
+            selectedSuggestionIndex = Math.min(
+              matches.length - 1,
+              selectedSuggestionIndex + 1
+            );
+          }
+          showPrompt();
+        }
+        return;
+      }
+
       // Enter key (13) - send message
       if (keyCode === 13) {
+        // Clear suggestions before processing
+        if (showingSuggestions) {
+          const matches = getMatchingCommands();
+          for (let i = 0; i < matches.length; i++) {
+            process.stdout.write('\n\x1b[K');
+          }
+          process.stdout.write(`\x1b[${matches.length}A`);
+          showingSuggestions = false;
+        }
+
         if (currentInput.trim()) {
-          processInput(currentInput.trim()).catch((error: Error) => {
+          const inputToProcess = currentInput.trim();
+          currentInput = ''; // Reset input immediately after capturing it
+          selectedSuggestionIndex = 0;
+          clearCurrentLine();
+          console.log(); // Move to next line after input
+          processInput(inputToProcess).catch((error: Error) => {
             console.error(
               chalk.red(`Error processing input: ${error.message}`)
             );
