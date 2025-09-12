@@ -349,19 +349,19 @@ export class CLI {
       );
     };
 
+    // Track the number of suggestions currently shown
+    let currentSuggestionCount = 0;
+
     const showPrompt = () => {
       if (!isProcessing) {
         clearCurrentLine();
 
         // Clear previous suggestions if any
-        if (showingSuggestions) {
-          const prevMatches = slashCommands.filter(cmd =>
-            cmd.command.toLowerCase().startsWith('/')
-          );
-          for (let i = 0; i < prevMatches.length; i++) {
+        if (showingSuggestions && currentSuggestionCount > 0) {
+          for (let i = 0; i < currentSuggestionCount; i++) {
             process.stdout.write('\n\x1b[K');
           }
-          process.stdout.write(`\x1b[${prevMatches.length}A`);
+          process.stdout.write(`\x1b[${currentSuggestionCount}A`);
         }
 
         // Show current input
@@ -372,20 +372,24 @@ export class CLI {
         if (
           matches.length > 0 &&
           currentInput.length > 0 &&
-          currentInput !== matches[0].command
+          currentInput.startsWith('/')
         ) {
           showingSuggestions = true;
+          currentSuggestionCount = matches.length;
 
           // Ensure selected index is valid
           if (selectedSuggestionIndex >= matches.length) {
             selectedSuggestionIndex = matches.length - 1;
           }
+          if (selectedSuggestionIndex < 0) {
+            selectedSuggestionIndex = 0;
+          }
 
           matches.forEach((cmd, index) => {
             const isSelected = index === selectedSuggestionIndex;
-            const prefix = isSelected ? chalk.cyan('▶') : ' ';
+            const prefix = isSelected ? chalk.bgCyan.black(' ▶ ') : '   ';
             const cmdText = isSelected
-              ? chalk.cyan(cmd.command)
+              ? chalk.bold.cyan(cmd.command)
               : chalk.gray(cmd.command);
             const descText = chalk.dim(` - ${cmd.description}`);
             process.stdout.write(`\n${prefix} ${cmdText}${descText}`);
@@ -397,6 +401,7 @@ export class CLI {
           process.stdout.write(chalk.cyan('> ') + currentInput);
         } else {
           showingSuggestions = false;
+          currentSuggestionCount = 0;
           selectedSuggestionIndex = 0;
         }
       }
@@ -534,8 +539,34 @@ export class CLI {
       const keyStr = key.toString();
       const keyCode = key[0];
 
-      // ESC key (27) - stop current response
-      if (keyCode === 27) {
+      // Check for arrow keys first: ESC [ A (up) or ESC [ B (down)
+      if (key.length === 3 && key[0] === 27 && key[1] === 91) {
+        const matches = getMatchingCommands();
+        if (matches.length > 0 && showingSuggestions) {
+          if (key[2] === 65) {
+            // Up arrow (ESC [ A)
+            selectedSuggestionIndex =
+              selectedSuggestionIndex > 0
+                ? selectedSuggestionIndex - 1
+                : matches.length - 1; // Wrap to bottom
+            showPrompt();
+            return;
+          } else if (key[2] === 66) {
+            // Down arrow (ESC [ B)
+            selectedSuggestionIndex =
+              selectedSuggestionIndex < matches.length - 1
+                ? selectedSuggestionIndex + 1
+                : 0; // Wrap to top
+            showPrompt();
+            return;
+          }
+        }
+        // Still return for any escape sequence to prevent them from being added to input
+        return;
+      }
+
+      // ESC key (27) - stop current response (check AFTER arrow keys)
+      if (keyCode === 27 && key.length === 1) {
         if (isProcessing && currentResponseController) {
           currentResponseController.abort();
         }
@@ -564,35 +595,16 @@ export class CLI {
         return;
       }
 
-      // Arrow keys
-      if (keyStr === '\x1b[A' || keyStr === '\x1b[B') {
-        const matches = getMatchingCommands();
-        if (matches.length > 0 && showingSuggestions) {
-          if (keyStr === '\x1b[A') {
-            // Up arrow
-            selectedSuggestionIndex = Math.max(0, selectedSuggestionIndex - 1);
-          } else {
-            // Down arrow
-            selectedSuggestionIndex = Math.min(
-              matches.length - 1,
-              selectedSuggestionIndex + 1
-            );
-          }
-          showPrompt();
-        }
-        return;
-      }
-
       // Enter key (13) - send message
       if (keyCode === 13) {
         // Clear suggestions before processing
-        if (showingSuggestions) {
-          const matches = getMatchingCommands();
-          for (let i = 0; i < matches.length; i++) {
+        if (showingSuggestions && currentSuggestionCount > 0) {
+          for (let i = 0; i < currentSuggestionCount; i++) {
             process.stdout.write('\n\x1b[K');
           }
-          process.stdout.write(`\x1b[${matches.length}A`);
+          process.stdout.write(`\x1b[${currentSuggestionCount}A`);
           showingSuggestions = false;
+          currentSuggestionCount = 0;
         }
 
         if (currentInput.trim()) {
