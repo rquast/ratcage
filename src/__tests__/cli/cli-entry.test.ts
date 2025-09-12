@@ -407,64 +407,241 @@ describe('CLI Entry Point', () => {
     });
   });
 
-  describe('Error Handling', () => {
-    it('should handle unknown commands gracefully', async () => {
-      // Clear mock calls before test
-      mockConsoleError.mockClear();
+  describe('Default Chat Mode Behavior', () => {
+    it('should start chat mode on no arguments', async () => {
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
 
-      // Commander might output to stderr
-      const originalStdoutWrite = process.stdout.write;
-      const originalStderrWrite = process.stderr.write;
-      let capturedOutput = '';
+      await cli.parse([]);
 
-      const mockWrite = vi.fn(
-        (
-          chunk: string | Uint8Array,
-          encoding?: BufferEncoding | ((err?: Error) => void),
-          cb?: (err?: Error) => void
-        ): boolean => {
-          if (typeof chunk === 'string') {
-            capturedOutput += chunk;
-          } else {
-            capturedOutput += chunk.toString();
-          }
-          if (typeof encoding === 'function') {
-            encoding();
-          } else if (cb) {
-            cb();
-          }
-          return true;
-        }
+      // Should have started chat mode since no arguments means default to chat
+      expect(startChatSpy).toHaveBeenCalledWith({ provider: 'claude-code' });
+    });
+
+    it('should start chat mode for unknown commands', async () => {
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
+
+      await cli.parse(['unknown-command']);
+
+      // Should have started chat mode since 'unknown-command' is not recognized
+      expect(startChatSpy).toHaveBeenCalledWith({ provider: 'claude-code' });
+    });
+
+    it('should start chat mode for multiple unknown arguments', async () => {
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
+
+      await cli.parse(['some', 'random', 'text']);
+
+      // Should have started chat mode since these aren't recognized commands
+      expect(startChatSpy).toHaveBeenCalledWith({ provider: 'claude-code' });
+    });
+
+    it('should NOT start chat mode when valid command is provided', async () => {
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
+      const handleQuerySpy = vi.spyOn(cli, 'handleQuery').mockResolvedValue();
+
+      await cli.parse(['query', 'test prompt']);
+
+      // Should NOT have started chat mode
+      expect(startChatSpy).not.toHaveBeenCalled();
+      // Should have handled the query command
+      expect(handleQuerySpy).toHaveBeenCalledWith(
+        'test prompt',
+        expect.any(Object)
       );
+    });
 
-      process.stdout.write = mockWrite as typeof process.stdout.write;
-      process.stderr.write = mockWrite as typeof process.stderr.write;
+    it('should NOT start chat mode when config command is provided', async () => {
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
+      const listConfigSpy = vi.spyOn(cli, 'listConfig').mockResolvedValue();
+
+      await cli.parse(['config', 'list']);
+
+      // Should NOT have started chat mode
+      expect(startChatSpy).not.toHaveBeenCalled();
+      // Should have handled the config command
+      expect(listConfigSpy).toHaveBeenCalled();
+    });
+
+    it('should NOT start chat mode when tools command is provided', async () => {
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
+      const listToolsSpy = vi.spyOn(cli, 'listTools').mockResolvedValue();
+
+      await cli.parse(['tools', 'list']);
+
+      // Should NOT have started chat mode
+      expect(startChatSpy).not.toHaveBeenCalled();
+      // Should have handled the tools command
+      expect(listToolsSpy).toHaveBeenCalled();
+    });
+
+    it('should explicitly start chat mode when chat command is provided', async () => {
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
+
+      await cli.parse(['chat']);
+
+      // Should have started chat mode explicitly
+      expect(startChatSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'claude-code' })
+      );
+    });
+
+    it('should show help when --help flag is provided', async () => {
+      const helpSpy = vi
+        .spyOn(cli.program, 'outputHelp')
+        .mockImplementation(() => '');
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
 
       try {
-        await cli.parse(['unknown-command']);
-      } catch {
-        // Expected error - commander throws when unknown command
+        await cli.parse(['--help']);
+      } catch (error) {
+        // Commander calls process.exit after showing help, which we mock to throw
+        if (error instanceof Error && error.message === 'process.exit called') {
+          // This is expected behavior
+        } else {
+          throw error;
+        }
       }
 
-      // Restore original writes
-      process.stdout.write = originalStdoutWrite;
-      process.stderr.write = originalStderrWrite;
-
-      // Check if error was output
-      expect(capturedOutput.toLowerCase()).toContain('unknown command');
+      // Should have shown help, NOT started chat mode
+      expect(helpSpy).toHaveBeenCalled();
+      expect(startChatSpy).not.toHaveBeenCalled();
     });
 
-    it('should show help on no arguments', async () => {
-      const helpSpy = vi.spyOn(cli.program, 'help').mockImplementation(() => {
-        // Mock help to avoid process.exit
-        throw new Error('help called'); // Commander.help() never returns
+    it('should show help when -h flag is provided', async () => {
+      const helpSpy = vi
+        .spyOn(cli.program, 'outputHelp')
+        .mockImplementation(() => '');
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
+
+      try {
+        await cli.parse(['-h']);
+      } catch (error) {
+        // Commander calls process.exit after showing help, which we mock to throw
+        if (error instanceof Error && error.message === 'process.exit called') {
+          // This is expected behavior
+        } else {
+          throw error;
+        }
+      }
+
+      // Should have shown help, NOT started chat mode
+      expect(helpSpy).toHaveBeenCalled();
+      expect(startChatSpy).not.toHaveBeenCalled();
+    });
+
+    it('should show version when --version flag is provided', async () => {
+      vi.spyOn(cli.program, 'outputHelp').mockImplementation(() => '');
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
+
+      try {
+        await cli.parse(['--version']);
+      } catch (error) {
+        // Commander calls process.exit after showing version, which we mock to throw
+        if (error instanceof Error && error.message === 'process.exit called') {
+          // This is expected behavior
+        } else {
+          throw error;
+        }
+      }
+
+      // Should NOT have started chat mode
+      expect(startChatSpy).not.toHaveBeenCalled();
+    });
+
+    it('should show version when -V flag is provided', async () => {
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
+
+      try {
+        await cli.parse(['-V']);
+      } catch (error) {
+        // Commander calls process.exit after showing version, which we mock to throw
+        if (error instanceof Error && error.message === 'process.exit called') {
+          // This is expected behavior
+        } else {
+          throw error;
+        }
+      }
+
+      // Should NOT have started chat mode
+      expect(startChatSpy).not.toHaveBeenCalled();
+    });
+
+    it('should NOT start chat mode when global flags are combined with commands', async () => {
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
+      const handleQuerySpy = vi.spyOn(cli, 'handleQuery').mockResolvedValue();
+
+      await cli.parse(['--verbose', 'query', 'test']);
+
+      // Should NOT have started chat mode
+      expect(startChatSpy).not.toHaveBeenCalled();
+      // Should have handled the query command
+      expect(handleQuerySpy).toHaveBeenCalled();
+    });
+
+    it('should show help when only global flags are provided', async () => {
+      // This is the actual behavior: global flags without a command show help
+      // This makes sense because flags like --verbose need a command to apply to
+      const helpSpy = vi
+        .spyOn(cli.program, 'outputHelp')
+        .mockImplementation(() => '');
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
+
+      try {
+        await cli.parse(['--verbose']);
+      } catch (error) {
+        // Commander calls process.exit after showing help
+        if (error instanceof Error && error.message === 'process.exit called') {
+          // This is expected behavior
+        } else {
+          throw error;
+        }
+      }
+
+      // Should show help, NOT start chat mode
+      // This is correct because global flags need a command to apply to
+      expect(helpSpy).toHaveBeenCalled();
+      expect(startChatSpy).not.toHaveBeenCalled();
+    });
+
+    it('should handle piped input without starting chat mode', async () => {
+      const handleQuerySpy = vi.spyOn(cli, 'handleQuery').mockResolvedValue();
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
+
+      // Mock stdin.isTTY using Object.defineProperty
+      const originalDescriptor = Object.getOwnPropertyDescriptor(
+        process.stdin,
+        'isTTY'
+      );
+      Object.defineProperty(process.stdin, 'isTTY', {
+        value: false,
+        writable: true,
+        configurable: true,
       });
 
-      // Expect the error to be thrown since help() never returns normally
-      await expect(cli.parse([])).rejects.toThrow('help called');
-      expect(helpSpy).toHaveBeenCalled();
-    });
+      await cli.parseWithStdin([], 'piped input text');
 
+      // Should handle as query, not start chat
+      expect(handleQuerySpy).toHaveBeenCalledWith(
+        'piped input text',
+        expect.any(Object)
+      );
+      expect(startChatSpy).not.toHaveBeenCalled();
+
+      // Restore original state
+      if (originalDescriptor) {
+        Object.defineProperty(process.stdin, 'isTTY', originalDescriptor);
+      } else {
+        // If there was no original descriptor, remove the property
+        Object.defineProperty(process.stdin, 'isTTY', {
+          value: undefined,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+  });
+
+  describe('Error Handling', () => {
     it('should handle provider initialization errors', async () => {
       const mockError = new Error('Provider initialization failed');
       vi.spyOn(cli, 'initializeProvider').mockRejectedValue(mockError);

@@ -6,7 +6,8 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "cagetools": "./dist/cli.js"
+    "cagetools": "./dist/cli.js",
+    "cage": "./dist/cli.js"
   },
   "scripts": {
     "dev": "vite-node src/cli.ts",

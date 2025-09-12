@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { promises as fs } from 'fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { promises as fs, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
@@ -368,31 +368,103 @@ describe('CLI Integration Tests', () => {
     });
   });
 
-  describe('Error Handling Integration', () => {
-    it('should handle unknown commands gracefully', async () => {
-      let errorOutput = '';
-      const originalWrite = process.stderr.write;
-      process.stderr.write = ((chunk: string | Buffer) => {
-        errorOutput += chunk.toString();
-        return true;
-      }) as ProcessWriteFunction;
+  describe('Default Chat Mode Integration', () => {
+    it('should start chat mode for unknown commands', async () => {
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
 
-      try {
-        const mockArgs = ['unknown-command'];
+      const mockArgs = ['unknown-command'];
+      await cli.parse(mockArgs);
 
-        try {
-          await cli.parse(mockArgs);
-        } catch {
-          // Expected to throw in test environment
-        }
-
-        // Should show unknown command error
-        expect(errorOutput).toContain('unknown command');
-      } finally {
-        process.stderr.write = originalWrite;
-      }
+      // Should have started chat mode since 'unknown-command' is not recognized
+      expect(startChatSpy).toHaveBeenCalledWith({ provider: 'claude-code' });
     });
 
+    it('should start chat mode when no arguments provided', async () => {
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
+
+      await cli.parse([]);
+
+      // Should default to chat mode
+      expect(startChatSpy).toHaveBeenCalledWith({ provider: 'claude-code' });
+    });
+
+    it('should handle multiple scenarios correctly', async () => {
+      const startChatSpy = vi.spyOn(cli, 'startChat').mockResolvedValue();
+
+      // Test various scenarios
+      const scenarios = [
+        { args: [], shouldStartChat: true, description: 'no arguments' },
+        {
+          args: ['hello'],
+          shouldStartChat: true,
+          description: 'unknown command',
+        },
+        {
+          args: ['query', 'test'],
+          shouldStartChat: false,
+          description: 'valid query command',
+        },
+        {
+          args: ['chat'],
+          shouldStartChat: true,
+          description: 'explicit chat command',
+        },
+        {
+          args: ['config', 'list'],
+          shouldStartChat: false,
+          description: 'valid config command',
+        },
+        {
+          args: ['tools', 'list'],
+          shouldStartChat: false,
+          description: 'valid tools command',
+        },
+      ];
+
+      for (const scenario of scenarios) {
+        startChatSpy.mockClear();
+
+        // Mock other methods to avoid actual execution
+        vi.spyOn(cli, 'handleQuery').mockResolvedValue();
+        vi.spyOn(cli, 'listConfig').mockResolvedValue();
+        vi.spyOn(cli, 'listTools').mockResolvedValue();
+
+        await cli.parse(scenario.args);
+
+        if (scenario.shouldStartChat) {
+          expect(startChatSpy).toHaveBeenCalled();
+        } else {
+          expect(startChatSpy).not.toHaveBeenCalled();
+        }
+      }
+    });
+  });
+
+  describe('CLI Alias Integration', () => {
+    it('should support both cagetools and cage commands from package.json', () => {
+      const packagePath = join(__dirname, '../../../package.json');
+      const packageJson = JSON.parse(readFileSync(packagePath, 'utf-8'));
+
+      // Verify both aliases are defined in package.json
+      expect(packageJson.bin).toHaveProperty('cagetools');
+      expect(packageJson.bin).toHaveProperty('cage');
+
+      // Both should point to the same CLI file
+      expect(packageJson.bin.cagetools).toBe('./dist/cli.js');
+      expect(packageJson.bin.cage).toBe('./dist/cli.js');
+    });
+
+    it('should have npm start script that runs the CLI', () => {
+      const packagePath = join(__dirname, '../../../package.json');
+      const packageJson = JSON.parse(readFileSync(packagePath, 'utf-8'));
+
+      // Verify npm start script exists
+      expect(packageJson.scripts).toHaveProperty('start');
+      expect(packageJson.scripts.start).toBe('node dist/cli.js');
+    });
+  });
+
+  describe('Error Handling Integration', () => {
     it('should handle missing configuration gracefully', async () => {
       let output = '';
       const originalLog = console.log;
@@ -409,6 +481,21 @@ describe('CLI Integration Tests', () => {
       } finally {
         console.log = originalLog;
       }
+    });
+
+    it('should handle provider initialization errors gracefully', async () => {
+      const mockError = new Error('Provider initialization failed');
+      vi.spyOn(cli, 'initializeProvider').mockRejectedValue(mockError);
+
+      const mockConsoleError = vi
+        .spyOn(console, 'error')
+        .mockImplementation(() => {});
+
+      await cli.parse(['query', 'test']);
+
+      expect(mockConsoleError).toHaveBeenCalledWith(
+        expect.stringContaining('Provider initialization failed')
+      );
     });
   });
 });

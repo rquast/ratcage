@@ -145,8 +145,30 @@ export class CLI {
       // Remove 'node' and script name if present
       const argv = args.length > 0 ? args : process.argv.slice(2);
 
+      // If no arguments provided, start chat mode by default
       if (argv.length === 0) {
-        this.program.help();
+        await this.startChat({ provider: 'claude-code' });
+        return;
+      }
+
+      // Check if the user is asking for help or version
+      if (
+        argv.includes('--help') ||
+        argv.includes('-h') ||
+        argv.includes('--version') ||
+        argv.includes('-V')
+      ) {
+        await this.program.parseAsync(['node', 'cagetools', ...argv]);
+        return;
+      }
+
+      // Check if the first argument is a known command
+      const knownCommands = ['query', 'chat', 'config', 'tools'];
+      const firstArg = argv[0];
+
+      // If first argument is not a command or flag, start chat mode
+      if (!firstArg.startsWith('-') && !knownCommands.includes(firstArg)) {
+        await this.startChat({ provider: 'claude-code' });
         return;
       }
 
