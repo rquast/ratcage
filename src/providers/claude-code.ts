@@ -3,6 +3,7 @@ import { spawn, execSync } from 'child_process';
 import { existsSync } from 'fs';
 import { homedir, platform } from 'os';
 import { join } from 'path';
+import chalk from 'chalk';
 import type {
   Provider,
   ProviderCapabilities,
@@ -33,6 +34,7 @@ export class ClaudeCodeProvider implements Provider {
     string,
     { sessionId: string; isFirst: boolean }
   >();
+  private activeProcesses = new Map<string, ChildProcess>();
 
   async initialize(config: ProviderConfig): Promise<void> {
     // Store config for use in query method
@@ -214,6 +216,7 @@ export class ClaudeCodeProvider implements Provider {
       session?: ProviderSession;
       allowedTools?: string[];
       disallowedTools?: string[];
+      signal?: AbortSignal;
     }
   ): AsyncIterableIterator<StreamChunk> {
     const args = ['--print'];
@@ -225,20 +228,24 @@ export class ClaudeCodeProvider implements Provider {
       '--verbose'
     );
 
-    // Handle session continuity for chat-like experience
+    // Handle session continuity
     if (options?.session) {
       const sessionData = this.activeSessions.get(options.session.id);
       if (sessionData) {
-        // Continue existing conversation
-        if (!sessionData.isFirst) {
-          args.push('--continue');
+        // We have session data - use the stored session ID
+        const { sessionId, isFirst } = sessionData;
+
+        if (isFirst) {
+          // First message of a NEW session - create it
+          args.push('--session-id', sessionId);
+          sessionData.isFirst = false; // Mark as no longer first
         } else {
-          // First message in session, use session ID
-          args.push('--session-id', sessionData.sessionId);
-          sessionData.isFirst = false;
+          // Subsequent messages - resume the session
+          args.push('--resume', sessionId);
         }
       } else {
-        // New session - generate UUID for Claude Code
+        // This shouldn't happen - session should be created by createSession()
+        // But handle it gracefully by creating a new session
         const sessionId = this.generateUUID();
         args.push('--session-id', sessionId);
         this.activeSessions.set(options.session.id, {
@@ -259,10 +266,69 @@ export class ClaudeCodeProvider implements Provider {
     // Add the prompt as the last argument
     args.push(prompt);
 
+    // Debug logging
+    if (process.env.DEBUG_CLAUDE) {
+      console.log(
+        '[DEBUG] Claude command:',
+        this.claudePath ?? 'claude',
+        args.join(' ')
+      );
+    }
+
     const claudeProcess = spawn(this.claudePath ?? 'claude', args, {
       stdio: ['inherit', 'pipe', 'pipe'],
       env: { ...process.env },
       timeout: this.config?.timeout,
+    });
+
+    // Generate a unique ID for this process
+    const processId = `${Date.now()}-${Math.random()}`;
+    this.activeProcesses.set(processId, claudeProcess);
+
+    // Add error handler
+    claudeProcess.on('error', err => {
+      // Only log if not due to SIGTERM (from abort)
+      if (err.message !== 'kill SIGTERM') {
+        console.error('Failed to start Claude process:', err.message);
+      }
+    });
+
+    // Clean up on process exit
+    claudeProcess.on('exit', () => {
+      this.activeProcesses.delete(processId);
+    });
+
+    // Handle abort signal
+    if (options?.signal) {
+      options.signal.addEventListener('abort', () => {
+        if (!claudeProcess.killed) {
+          claudeProcess.kill('SIGTERM');
+        }
+      });
+    }
+
+    // Handle stderr and show errors
+    claudeProcess.stderr?.on('data', data => {
+      const errorMsg = data.toString();
+
+      // Ignore EPIPE errors when we're aborting
+      if (errorMsg.includes('EPIPE') && claudeProcess.killed) {
+        return;
+      }
+
+      // Only show actual error messages about sessions
+      if (errorMsg.includes('already in use')) {
+        console.error(chalk.yellow('Claude session warning:', errorMsg.trim()));
+      } else if (errorMsg.includes('Error:') || errorMsg.includes('error:')) {
+        // Don't show errors if we're being killed
+        if (!claudeProcess.killed) {
+          console.error(chalk.red('Claude error:', errorMsg.trim()));
+        }
+      }
+      // Silent unless DEBUG mode
+      else if (process.env.DEBUG_CLAUDE) {
+        console.error('Claude stderr:', errorMsg);
+      }
     });
 
     if (options?.stream) {
@@ -273,146 +339,159 @@ export class ClaudeCodeProvider implements Provider {
 
       let buffer = '';
 
-      for await (const chunk of claudeProcess.stdout) {
-        const rawContent = Buffer.isBuffer(chunk)
-          ? chunk.toString()
-          : String(chunk);
-        buffer += rawContent;
-
-        // Process complete JSON lines
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? ''; // Keep incomplete line in buffer
-
-        for (const line of lines) {
-          const trimmedLine = line.trim();
-          if (!trimmedLine) {
-            continue;
+      try {
+        for await (const chunk of claudeProcess.stdout) {
+          // Stop processing if process was killed
+          if (claudeProcess.killed) {
+            break;
           }
 
-          try {
-            const event = JSON.parse(trimmedLine) as {
-              type: string;
-              event?: {
+          const rawContent = Buffer.isBuffer(chunk)
+            ? chunk.toString()
+            : String(chunk);
+          buffer += rawContent;
+
+          // Process complete JSON lines
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? ''; // Keep incomplete line in buffer
+
+          for (const line of lines) {
+            const trimmedLine = line.trim();
+            if (!trimmedLine) {
+              continue;
+            }
+
+            try {
+              const event = JSON.parse(trimmedLine) as {
                 type: string;
-                delta?: {
+                event?: {
                   type: string;
-                  text?: string;
+                  delta?: {
+                    type: string;
+                    text?: string;
+                  };
+                  content_block?: {
+                    type: string;
+                    name?: string;
+                    input?: unknown;
+                  };
                 };
-                content_block?: {
-                  type: string;
-                  name?: string;
-                  input?: unknown;
-                };
+                subtype?: string;
+                session_id?: string;
+                metadata?: Record<string, unknown>;
               };
-              subtype?: string;
-              session_id?: string;
-              metadata?: Record<string, unknown>;
-            };
 
-            // Handle Claude Code's actual JSON format
-            if (event.type === 'stream_event' && event.event) {
-              const streamEvent = event.event;
+              // Handle Claude Code's actual JSON format
+              if (event.type === 'stream_event' && event.event) {
+                const streamEvent = event.event;
 
-              // Handle text content deltas (real-time streaming)
-              if (
-                streamEvent.type === 'content_block_delta' &&
-                streamEvent.delta?.type === 'text_delta'
-              ) {
-                yield {
-                  type: 'text',
-                  content: streamEvent.delta.text ?? '',
-                  isComplete: false,
-                  metadata: { session_id: event.session_id },
-                };
-              }
-
-              // Handle tool use events
-              else if (
-                streamEvent.type === 'content_block_start' &&
-                streamEvent.content_block?.type === 'tool_use'
-              ) {
-                const toolName = streamEvent.content_block.name;
-                const toolInput = streamEvent.content_block.input as Record<
-                  string,
-                  unknown
-                >;
-
-                // Show comprehensive tool call information
-                let toolDescription = `\n🔧 TOOL CALL: ${toolName}\n`;
-                toolDescription += `┌─────────────────────────────────────\n`;
-
-                if (toolInput && Object.keys(toolInput).length > 0) {
-                  for (const [key, value] of Object.entries(toolInput)) {
-                    let valueStr: string;
-                    if (typeof value === 'string') {
-                      valueStr = value;
-                    } else if (typeof value === 'object' && value !== null) {
-                      valueStr = JSON.stringify(value, null, 2);
-                    } else {
-                      valueStr = String(value);
-                    }
-
-                    // Show full value, don't truncate
-                    const lines = valueStr.split('\n');
-                    toolDescription += `│ ${key}:\n`;
-                    for (const line of lines) {
-                      toolDescription += `│   ${line}\n`;
-                    }
-                    toolDescription += `│\n`;
-                  }
-                } else {
-                  toolDescription += `│ (no parameters)\n`;
+                // Handle text content deltas (real-time streaming)
+                if (
+                  streamEvent.type === 'content_block_delta' &&
+                  streamEvent.delta?.type === 'text_delta'
+                ) {
+                  yield {
+                    type: 'text',
+                    content: streamEvent.delta.text ?? '',
+                    isComplete: false,
+                    metadata: { session_id: event.session_id },
+                  };
                 }
 
-                toolDescription += `└─────────────────────────────────────\n`;
+                // Handle tool use events
+                else if (
+                  streamEvent.type === 'content_block_start' &&
+                  streamEvent.content_block?.type === 'tool_use'
+                ) {
+                  const toolName = streamEvent.content_block.name;
+                  const toolInput = streamEvent.content_block.input as Record<
+                    string,
+                    unknown
+                  >;
 
-                yield {
-                  type: 'tool_use',
-                  content: toolDescription,
-                  metadata: {
-                    toolName: toolName,
-                    toolInput: toolInput,
-                    session_id: event.session_id,
-                  },
-                };
+                  // Show comprehensive tool call information
+                  let toolDescription = `\n🔧 TOOL CALL: ${toolName}\n`;
+                  toolDescription += `┌─────────────────────────────────────\n`;
+
+                  if (toolInput && Object.keys(toolInput).length > 0) {
+                    for (const [key, value] of Object.entries(toolInput)) {
+                      let valueStr: string;
+                      if (typeof value === 'string') {
+                        valueStr = value;
+                      } else if (typeof value === 'object' && value !== null) {
+                        valueStr = JSON.stringify(value, null, 2);
+                      } else {
+                        valueStr = String(value);
+                      }
+
+                      // Show full value, don't truncate
+                      const lines = valueStr.split('\n');
+                      toolDescription += `│ ${key}:\n`;
+                      for (const line of lines) {
+                        toolDescription += `│   ${line}\n`;
+                      }
+                      toolDescription += `│\n`;
+                    }
+                  } else {
+                    toolDescription += `│ (no parameters)\n`;
+                  }
+
+                  toolDescription += `└─────────────────────────────────────\n`;
+
+                  yield {
+                    type: 'tool_use',
+                    content: toolDescription,
+                    metadata: {
+                      toolName: toolName,
+                      toolInput: toolInput,
+                      session_id: event.session_id,
+                    },
+                  };
+                }
               }
-            }
 
-            // Handle system messages (including thinking-like content)
-            else if (event.type === 'system' && event.subtype === 'init') {
-              // This is session initialization, we can ignore or use for metadata
+              // Handle system messages (including thinking-like content)
+              else if (event.type === 'system' && event.subtype === 'init') {
+                // This is session initialization, we can ignore or use for metadata
+              }
+            } catch {
+              // If JSON parsing fails, treat as raw text
+              yield {
+                type: 'text',
+                content: trimmedLine + '\n',
+                metadata: {},
+              };
+            }
+          }
+        }
+
+        // Process any remaining buffer content
+        if (buffer.trim()) {
+          try {
+            const event = JSON.parse(buffer.trim()) as {
+              content?: string;
+              metadata?: Record<string, unknown>;
+            };
+            if (event.content) {
+              yield {
+                type: 'text',
+                content: event.content,
+                metadata: event.metadata ?? {},
+              };
             }
           } catch {
-            // If JSON parsing fails, treat as raw text
             yield {
               type: 'text',
-              content: trimmedLine + '\n',
+              content: buffer,
               metadata: {},
             };
           }
         }
-      }
-
-      // Process any remaining buffer content
-      if (buffer.trim()) {
-        try {
-          const event = JSON.parse(buffer.trim()) as {
-            content?: string;
-            metadata?: Record<string, unknown>;
-          };
-          if (event.content) {
-            yield {
-              type: 'text',
-              content: event.content,
-              metadata: event.metadata ?? {},
-            };
-          }
-        } catch {
-          yield {
-            type: 'text',
-            content: buffer,
-            metadata: {},
-          };
+      } catch (error) {
+        // Handle stream errors (e.g., EPIPE when process is killed)
+        if (!claudeProcess.killed) {
+          // Only throw if not intentionally killed
+          throw error;
         }
       }
     } else {
@@ -510,6 +589,15 @@ export class ClaudeCodeProvider implements Provider {
       this.claudeProcess.kill();
       this.claudeProcess = undefined;
     }
+
+    // Kill all active processes
+    for (const process of this.activeProcesses.values()) {
+      if (!process.killed) {
+        process.kill('SIGTERM');
+      }
+    }
+    this.activeProcesses.clear();
+
     // Clear all active sessions
     this.activeSessions.clear();
   }

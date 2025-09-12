@@ -3,9 +3,10 @@ import chalk from 'chalk';
 import { createInterface } from 'readline';
 import { ClaudeAPIProvider } from '../providers/claude-api';
 import type { Provider } from '../types/provider';
-import { readFileSync } from 'fs';
+import { readFileSync, promises as fs } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { homedir } from 'os';
 
 // ES module __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -337,6 +338,7 @@ export class CLI {
       },
       { command: '/exit', description: 'Exit CageTools' },
       { command: '/help', description: 'Show available commands' },
+      { command: '/resume', description: 'Resume a previous session' },
     ];
 
     const getMatchingCommands = () => {
@@ -411,6 +413,260 @@ export class CLI {
       process.stdout.write('\r\x1b[K');
     };
 
+    // Function to handle session resume
+    const handleSessionResume = async () => {
+      console.log(chalk.cyan('\n📋 Fetching available sessions...'));
+
+      // Get the project directory path for Claude sessions
+      const cwd = process.cwd();
+      const projectPath = cwd.replace(/\//g, '-');
+      const sessionsDir = join(homedir(), '.claude', 'projects', projectPath);
+
+      try {
+        // Read all session files
+        const files = await fs.readdir(sessionsDir);
+        const sessionFiles = files.filter(f => f.endsWith('.jsonl'));
+
+        if (sessionFiles.length === 0) {
+          console.log(
+            chalk.yellow('No previous sessions found for this project')
+          );
+          showPrompt();
+          return;
+        }
+
+        // Parse session metadata
+        const sessions: Array<{
+          id: string;
+          time: Date;
+          preview: string;
+          filename: string;
+        }> = [];
+
+        for (const file of sessionFiles) {
+          const sessionId = file.replace('.jsonl', '');
+          const filePath = join(sessionsDir, file);
+          const stats = await fs.stat(filePath);
+
+          // Read first line to get initial message
+          const content = await fs.readFile(filePath, 'utf-8');
+          const firstLine = content.split('\n')[0];
+
+          if (firstLine) {
+            try {
+              const data = JSON.parse(firstLine);
+              const preview =
+                data.message?.content?.substring(0, 60) ||
+                'No preview available';
+
+              sessions.push({
+                id: sessionId,
+                time: stats.mtime,
+                preview: preview.replace(/\n/g, ' '),
+                filename: file,
+              });
+            } catch {
+              // Skip invalid JSON lines
+            }
+          }
+        }
+
+        // Sort by most recent first
+        sessions.sort((a, b) => b.time.getTime() - a.time.getTime());
+
+        if (sessions.length === 0) {
+          console.log(chalk.yellow('No valid sessions found'));
+          showPrompt();
+          return;
+        }
+
+        // Show session selection UI
+        console.log(chalk.green(`\nFound ${sessions.length} session(s):`));
+        console.log(
+          chalk.gray(
+            'Use arrow keys to select, Enter to resume, ESC to cancel\n'
+          )
+        );
+
+        let selectedSessionIndex = 0;
+        const maxDisplayCount = 15; // Show up to 15 sessions at once
+        let scrollOffset = 0; // Track scrolling position
+
+        const showSessions = () => {
+          // Clear previous session list display including scroll indicator
+          const displayCount = Math.min(sessions.length, maxDisplayCount);
+          const linesToClear =
+            sessions.length > maxDisplayCount ? displayCount + 1 : displayCount;
+
+          // Move to top of display area
+          process.stdout.write(`\x1b[${linesToClear}A`);
+
+          // Calculate what sessions to show based on scroll position
+          const startIndex = scrollOffset;
+          const endIndex = Math.min(
+            startIndex + maxDisplayCount,
+            sessions.length
+          );
+          const displaySessions = sessions.slice(startIndex, endIndex);
+
+          displaySessions.forEach((session, displayIndex) => {
+            const actualIndex = startIndex + displayIndex;
+            const isSelected = actualIndex === selectedSessionIndex;
+            const prefix = isSelected ? chalk.bgCyan.black(' ▶ ') : '   ';
+            const timeStr = session.time.toLocaleString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+            });
+            const sessionText = isSelected
+              ? chalk.bold.cyan(`${timeStr} - ${session.preview}`)
+              : chalk.gray(`${timeStr} - ${session.preview}`);
+            process.stdout.write(`\r\x1b[K${prefix} ${sessionText}\n`);
+          });
+
+          // Clear any remaining lines if we're showing fewer sessions
+          for (let i = displaySessions.length; i < displayCount; i++) {
+            process.stdout.write(`\r\x1b[K\n`);
+          }
+
+          // Show scroll indicator on its own line if there are more sessions
+          if (sessions.length > maxDisplayCount) {
+            const currentPos = selectedSessionIndex + 1;
+            const scrollInfo = chalk.dim(
+              `  [${currentPos}/${sessions.length}] - Use ↑↓ to navigate`
+            );
+            process.stdout.write(`\r\x1b[K${scrollInfo}\n`);
+          } else {
+            // Clear the scroll indicator line if not needed
+            process.stdout.write(`\r\x1b[K\n`);
+          }
+        };
+
+        // Initial display - make space for sessions and scroll indicator
+        const displayCount = Math.min(sessions.length, maxDisplayCount);
+        const totalLines =
+          sessions.length > maxDisplayCount ? displayCount + 1 : displayCount;
+        for (let i = 0; i < totalLines; i++) {
+          console.log();
+        }
+        showSessions();
+
+        // Store original stdin mode handlers
+        const originalDataListeners = process.stdin.listeners('data');
+        process.stdin.removeAllListeners('data');
+
+        return new Promise<void>(resolve => {
+          const handleSessionKey = (key: Buffer) => {
+            const keyCode = key[0];
+
+            // ESC key - cancel
+            if (keyCode === 27 && key.length === 1) {
+              process.stdin.removeListener('data', handleSessionKey);
+              // Restore original listeners
+              originalDataListeners.forEach(listener => {
+                process.stdin.on('data', listener as (chunk: Buffer) => void);
+              });
+              console.log(chalk.yellow('\nSession selection cancelled'));
+              showPrompt();
+              resolve();
+              return;
+            }
+
+            // Arrow keys
+            if (key.length === 3 && key[0] === 27 && key[1] === 91) {
+              if (key[2] === 65) {
+                // Up arrow
+                if (selectedSessionIndex > 0) {
+                  selectedSessionIndex--;
+                  // Adjust scroll offset if needed
+                  if (selectedSessionIndex < scrollOffset) {
+                    scrollOffset = selectedSessionIndex;
+                  }
+                  showSessions();
+                }
+              } else if (key[2] === 66) {
+                // Down arrow
+                if (selectedSessionIndex < sessions.length - 1) {
+                  selectedSessionIndex++;
+                  // Adjust scroll offset if needed
+                  if (selectedSessionIndex >= scrollOffset + maxDisplayCount) {
+                    scrollOffset = selectedSessionIndex - maxDisplayCount + 1;
+                  }
+                  showSessions();
+                }
+              }
+              return;
+            }
+
+            // Enter key - select session
+            if (keyCode === 13) {
+              process.stdin.removeListener('data', handleSessionKey);
+
+              const selectedSession = sessions[selectedSessionIndex];
+              console.log(
+                chalk.green(
+                  `\n✓ Resuming session from ${selectedSession.time.toLocaleString()}`
+                )
+              );
+              console.log(chalk.gray(`Session ID: ${selectedSession.id}`));
+              console.log();
+
+              // Restore original listeners
+              originalDataListeners.forEach(listener => {
+                process.stdin.on('data', listener as (chunk: Buffer) => void);
+              });
+
+              // Hijack the current session to use the resumed session ID
+              if (this.provider && 'activeSessions' in this.provider) {
+                const provider = this.provider as {
+                  activeSessions: Map<
+                    string,
+                    {
+                      sessionId: string;
+                      isFirst: boolean;
+                      isResumed?: boolean;
+                    }
+                  >;
+                };
+
+                // Clear any existing mappings
+                provider.activeSessions.clear();
+
+                // Map our current session to the resumed session ID
+                if (session?.id) {
+                  provider.activeSessions.set(session.id, {
+                    sessionId: selectedSession.id,
+                    isFirst: false, // Session already exists, use --resume not --session-id
+                    isResumed: true, // Track that this is a resumed session
+                  });
+                }
+
+                console.log(
+                  chalk.cyan('Session resumed. Continue your conversation:\n')
+                );
+              }
+
+              showPrompt();
+              resolve();
+              return;
+            }
+          };
+
+          process.stdin.on('data', handleSessionKey);
+        });
+      } catch (error) {
+        const err = error as { code?: string; message?: string };
+        if (err.code === 'ENOENT') {
+          console.log(chalk.yellow('No sessions found for this project'));
+        } else {
+          console.log(chalk.red('❌ Failed to read sessions'));
+          console.log(chalk.gray('Error: ' + (err.message || 'Unknown error')));
+        }
+        showPrompt();
+      }
+    };
+
     const processInput = async (input: string) => {
       // Handle slash commands
       if (input.toLowerCase() === '/exit') {
@@ -445,6 +701,12 @@ export class CLI {
         return;
       }
 
+      if (input.toLowerCase() === '/resume') {
+        // Handle session resume
+        await handleSessionResume();
+        return;
+      }
+
       if (this.provider) {
         isProcessing = true;
         currentResponseController = new AbortController();
@@ -452,11 +714,31 @@ export class CLI {
         clearCurrentLine();
         console.log();
 
+        // Debug: Check session state
+        if (process.env.DEBUG) {
+          console.log(chalk.yellow('[DEBUG] Session ID:', session?.id));
+          if ('activeSessions' in this.provider) {
+            const provider = this.provider as {
+              activeSessions: Map<string, any>;
+            };
+            console.log(
+              chalk.yellow(
+                '[DEBUG] Active sessions:',
+                Array.from(provider.activeSessions.entries())
+              )
+            );
+          }
+        }
+
         try {
-          const response = this.provider.query(input, {
+          const queryOptions = {
             session,
             stream: true,
-          });
+            ...(currentResponseController?.signal && {
+              signal: currentResponseController.signal,
+            }),
+          };
+          const response = this.provider.query(input, queryOptions);
           let inCodeBlock = false;
 
           for await (const chunk of response) {

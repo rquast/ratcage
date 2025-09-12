@@ -86,6 +86,7 @@ export interface Provider {
       stream?: boolean;
       tools?: Tool[];
       session?: ProviderSession;
+      signal?: AbortSignal;
     }
   ): AsyncIterable<StreamChunk>;
 

@@ -375,7 +375,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
       expect(chunks[0].content).toContain('Tool executed');
     });
 
-    it('should maintain persistent session with proper session ID and continue flags', async () => {
+    it('should maintain persistent session with proper session ID and resume flags', async () => {
       const mockProcess1 = createMockProcess({
         stdout: {
           on: vi.fn((event: string, callback: Function) => {
@@ -427,7 +427,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         chunks1.push(chunk);
       }
 
-      // Second query - should use --continue
+      // Second query - should use --resume with session ID
       const chunks2: StreamChunk[] = [];
       for await (const chunk of provider.query('Second message', { session })) {
         chunks2.push(chunk);
@@ -449,7 +449,7 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         expect.any(Object)
       );
 
-      // Verify second call uses continue
+      // Verify second call uses --resume with session ID
       expect(spawn).toHaveBeenNthCalledWith(
         2,
         '/usr/local/bin/claude',
@@ -458,7 +458,8 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
           '--output-format=stream-json',
           '--include-partial-messages',
           '--verbose',
-          '--continue',
+          '--resume',
+          session.id,
           'Second message',
         ],
         expect.any(Object)
