@@ -509,11 +509,10 @@ describe('ClaudeCodeProvider CLI Wrapper', () => {
         chunks.push(chunk);
       }
 
-      expect(chunks.length).toBe(2);
-      expect(chunks[0].type).toBe('tool_use');
-      expect(chunks[0].metadata?.toolName).toBe('bash');
-      expect(chunks[1].type).toBe('text');
-      expect(chunks[1].content).toBe('Files listed successfully');
+      // Tool calls are now completely suppressed, so we only get text output
+      expect(chunks.length).toBe(1);
+      expect(chunks[0].type).toBe('text');
+      expect(chunks[0].content).toBe('Files listed successfully');
     });
 
     it('should handle session destruction properly', async () => {

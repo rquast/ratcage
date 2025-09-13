@@ -454,9 +454,11 @@ export class CLI {
 
           if (firstLine) {
             try {
-              const data = JSON.parse(firstLine);
+              const data = JSON.parse(firstLine) as {
+                message?: { content?: string };
+              };
               const preview =
-                data.message?.content?.substring(0, 60) ||
+                data.message?.content?.substring(0, 60) ??
                 'No preview available';
 
               sessions.push({
@@ -661,7 +663,9 @@ export class CLI {
           console.log(chalk.yellow('No sessions found for this project'));
         } else {
           console.log(chalk.red('❌ Failed to read sessions'));
-          console.log(chalk.gray('Error: ' + (err.message || 'Unknown error')));
+          console.log(
+            chalk.gray('Error: ' + ((err as Error).message ?? 'Unknown error'))
+          );
         }
         showPrompt();
       }
@@ -719,7 +723,7 @@ export class CLI {
           console.log(chalk.yellow('[DEBUG] Session ID:', session?.id));
           if ('activeSessions' in this.provider) {
             const provider = this.provider as {
-              activeSessions: Map<string, any>;
+              activeSessions: Map<string, unknown>;
             };
             console.log(
               chalk.yellow(

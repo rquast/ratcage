@@ -308,8 +308,8 @@ export class ClaudeCodeProvider implements Provider {
     }
 
     // Handle stderr and show errors
-    claudeProcess.stderr?.on('data', data => {
-      const errorMsg = data.toString();
+    claudeProcess.stderr?.on('data', (data: Buffer | string) => {
+      const errorMsg = Buffer.isBuffer(data) ? data.toString() : String(data);
 
       // Ignore EPIPE errors when we're aborting
       if (errorMsg.includes('EPIPE') && claudeProcess.killed) {
@@ -398,55 +398,13 @@ export class ClaudeCodeProvider implements Provider {
                   };
                 }
 
-                // Handle tool use events
+                // Handle tool use events - completely ignore them
                 else if (
                   streamEvent.type === 'content_block_start' &&
                   streamEvent.content_block?.type === 'tool_use'
                 ) {
-                  const toolName = streamEvent.content_block.name;
-                  const toolInput = streamEvent.content_block.input as Record<
-                    string,
-                    unknown
-                  >;
-
-                  // Show comprehensive tool call information
-                  let toolDescription = `\n🔧 TOOL CALL: ${toolName}\n`;
-                  toolDescription += `┌─────────────────────────────────────\n`;
-
-                  if (toolInput && Object.keys(toolInput).length > 0) {
-                    for (const [key, value] of Object.entries(toolInput)) {
-                      let valueStr: string;
-                      if (typeof value === 'string') {
-                        valueStr = value;
-                      } else if (typeof value === 'object' && value !== null) {
-                        valueStr = JSON.stringify(value, null, 2);
-                      } else {
-                        valueStr = String(value);
-                      }
-
-                      // Show full value, don't truncate
-                      const lines = valueStr.split('\n');
-                      toolDescription += `│ ${key}:\n`;
-                      for (const line of lines) {
-                        toolDescription += `│   ${line}\n`;
-                      }
-                      toolDescription += `│\n`;
-                    }
-                  } else {
-                    toolDescription += `│ (no parameters)\n`;
-                  }
-
-                  toolDescription += `└─────────────────────────────────────\n`;
-
-                  yield {
-                    type: 'tool_use',
-                    content: toolDescription,
-                    metadata: {
-                      toolName: toolName,
-                      toolInput: toolInput,
-                      session_id: event.session_id,
-                    },
-                  };
+                  // Completely skip tool calls - don't track, don't log, don't yield
+                  // Tool calls happen silently in the background
                 }
               }
 
