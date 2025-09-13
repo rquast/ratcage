@@ -29,6 +29,7 @@ export default defineConfig({
         '@modelcontextprotocol/server-filesystem',
         'marked',
         'marked-terminal',
+        'ansi-escapes',
         'ora',
         'child_process',
         'fs',

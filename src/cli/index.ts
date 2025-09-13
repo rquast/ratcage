@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { Chalk } from 'chalk';
+import ansiEscapes from 'ansi-escapes';
 
 // Force chalk to use colors - fixes issue where chalk.level is 0
 // and marked-terminal doesn't apply formatting
@@ -64,6 +65,7 @@ export class CLI {
   private provider?: Provider;
   private config: Record<string, unknown> = {};
   private formatMarkdownOutput = true; // Default to formatted markdown
+  private renderedLineCount = 0; // Track how many lines we've rendered
 
   constructor() {
     this.program = new Command();
@@ -806,6 +808,123 @@ export class CLI {
           const response = this.provider.query(input, queryOptions);
           let inCodeBlock = false;
           let fullResponse = '';
+          let renderThrottleTimer: NodeJS.Timeout | null = null;
+          const RENDER_THROTTLE_MS = 30; // Throttle re-renders to every 30ms for smoother updates
+          let thinkingLineCount = 0; // Track thinking block lines to clear them
+
+          // Helper function to render markdown incrementally using optimistic parsing
+          const renderMarkdownIncremental = () => {
+            if (!this.formatMarkdownOutput || !fullResponse) {
+              return;
+            }
+
+            try {
+              // Clear previous render if we have one
+              if (this.renderedLineCount > 0) {
+                // Move cursor to beginning of rendered content and clear everything below
+                process.stdout.write(
+                  ansiEscapes.cursorUp(this.renderedLineCount)
+                );
+                process.stdout.write(ansiEscapes.cursorLeft);
+                process.stdout.write(ansiEscapes.eraseDown);
+              }
+
+              // Apply optimistic parsing for incomplete markdown
+              let optimisticMarkdown = fullResponse;
+
+              // Ensure proper separation between plain text intro and markdown headers
+              // Look for patterns like "some text.## Header" and add newline before ##
+              optimisticMarkdown = optimisticMarkdown.replace(
+                /([.!?])(#{1,6}\s)/g,
+                '$1\n\n$2'
+              );
+
+              // FIX: Remove extra blank lines between list items at the same indentation
+              // Claude often sends markdown with blank lines between sub-items
+              // This needs to be done carefully to avoid breaking the markdown structure
+
+              // Remove blank lines between consecutive list items with same indentation
+              // Match: "    * item\n\n    * next item" -> "    * item\n    * next item"
+              optimisticMarkdown = optimisticMarkdown.replace(
+                /(\n( *)[*-] [^\n]*)\n\s*\n([ ]*[*-] )/g,
+                (match: string, p1: string, indent1: string, p3: string) => {
+                  const indent2Match = p3.match(/^( *)/);
+                  const indent2 = indent2Match?.[1] ?? '';
+                  // Only collapse if same indentation level
+                  if (indent1.length === indent2.length) {
+                    return p1 + '\n' + p3;
+                  }
+                  return match;
+                }
+              );
+
+              // Handle incomplete bold/italic markers
+              const unclosedBold =
+                (optimisticMarkdown.match(/\*\*/g) ?? []).length % 2 !== 0;
+              const unclosedItalic =
+                (optimisticMarkdown.match(/(?<!\*)\*(?!\*)/g) ?? []).length %
+                  2 !==
+                0;
+              const unclosedCode =
+                (optimisticMarkdown.match(/`/g) ?? []).length % 2 !== 0;
+
+              // Add closing markers for optimistic rendering
+              if (unclosedBold) {
+                optimisticMarkdown += '**';
+              }
+              if (unclosedItalic) {
+                optimisticMarkdown += '*';
+              }
+              if (unclosedCode) {
+                optimisticMarkdown += '`';
+              }
+
+              // Handle incomplete code blocks
+              const codeBlockStart = (optimisticMarkdown.match(/```/g) ?? [])
+                .length;
+              if (codeBlockStart % 2 !== 0) {
+                optimisticMarkdown += '\n```';
+              }
+
+              // Handle incomplete lists (add placeholder if line starts with number but no content)
+              optimisticMarkdown = optimisticMarkdown.replace(
+                /(\n\d+\.\s*)$/gm,
+                '$1...'
+              );
+              optimisticMarkdown = optimisticMarkdown.replace(
+                /(\n[-*]\s*)$/gm,
+                '$1...'
+              );
+
+              // Parse and render the optimistic markdown
+              const rendered = marked.parse(optimisticMarkdown) as string;
+              process.stdout.write(rendered);
+
+              // Track how many lines we rendered
+              // Important: Count actual lines in the output, not just newlines
+              // Split by newline and count, but marked.parse adds trailing newlines
+              const lines = rendered.split('\n');
+              // If last element is empty (trailing newline), don't count it as a line to move up
+              this.renderedLineCount = rendered.endsWith('\n')
+                ? lines.length - 1
+                : lines.length;
+            } catch {
+              // Fallback: just show raw markdown if parsing fails
+              if (this.renderedLineCount > 0) {
+                process.stdout.write(
+                  ansiEscapes.cursorUp(this.renderedLineCount)
+                );
+                process.stdout.write(ansiEscapes.cursorLeft);
+                process.stdout.write(ansiEscapes.eraseDown);
+              }
+              process.stdout.write(fullResponse);
+              // Count actual lines in fallback too
+              const fallbackLines = fullResponse.split('\n');
+              this.renderedLineCount = fullResponse.endsWith('\n')
+                ? fallbackLines.length - 1
+                : fallbackLines.length;
+            }
+          };
 
           for await (const chunk of response) {
             // Check if we should abort
@@ -816,11 +935,47 @@ export class CLI {
               break;
             }
 
-            // If markdown formatting is enabled, collect all text chunks
+            // If markdown formatting is enabled, collect and render incrementally
             if (this.formatMarkdownOutput) {
+              // Handle thinking blocks
+              if (chunk.type === 'thinking') {
+                // Clear any previous markdown rendering
+                if (this.renderedLineCount > 0) {
+                  process.stdout.write(
+                    ansiEscapes.cursorUp(this.renderedLineCount)
+                  );
+                  process.stdout.write(ansiEscapes.cursorLeft);
+                  process.stdout.write(ansiEscapes.eraseDown);
+                  this.renderedLineCount = 0;
+                }
+                // Show thinking content
+                process.stdout.write(chalk.gray(chunk.content));
+                // Track how many lines the thinking block takes
+                thinkingLineCount += (chunk.content.match(/\n/g) ?? []).length;
+                if (!chunk.content.endsWith('\n')) {
+                  thinkingLineCount += 1; // Count partial line
+                }
+              }
               // Only collect text content for markdown rendering
-              if (chunk.type === 'text' || chunk.type === undefined) {
+              else if (chunk.type === 'text' || chunk.type === undefined) {
+                // Clear thinking block if present
+                if (thinkingLineCount > 0) {
+                  process.stdout.write(ansiEscapes.cursorUp(thinkingLineCount));
+                  process.stdout.write(ansiEscapes.cursorLeft);
+                  process.stdout.write(ansiEscapes.eraseDown);
+                  thinkingLineCount = 0;
+                }
+
                 fullResponse += chunk.content;
+
+                // Throttle rendering to avoid too frequent updates but still be responsive
+                if (renderThrottleTimer) {
+                  clearTimeout(renderThrottleTimer);
+                }
+                renderThrottleTimer = setTimeout(() => {
+                  renderMarkdownIncremental();
+                  renderThrottleTimer = null;
+                }, RENDER_THROTTLE_MS);
               }
               // Still show tool use, errors, etc. immediately
               else if (chunk.type === 'tool_result') {
@@ -874,15 +1029,17 @@ export class CLI {
             }
           }
 
-          // If markdown formatting is enabled, render the complete response
+          // Final render to ensure everything is displayed
           if (this.formatMarkdownOutput && fullResponse) {
-            try {
-              const rendered = marked.parse(fullResponse) as string;
-              process.stdout.write(rendered);
-            } catch {
-              // Fallback to raw output if rendering fails
-              process.stdout.write(fullResponse);
+            // Clear any pending throttled render
+            if (renderThrottleTimer) {
+              clearTimeout(renderThrottleTimer);
             }
+            // Do one final render to ensure completeness
+            renderMarkdownIncremental();
+
+            // Reset tracking for next message
+            this.renderedLineCount = 0;
           } else if (!this.formatMarkdownOutput && inCodeBlock) {
             // Close any open code block for non-markdown mode
             process.stdout.write(chalk.blue('\n```\n'));
