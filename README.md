@@ -210,6 +210,7 @@ npm run check            # Run all quality checks (typecheck + lint + format + t
 The project enforces strict TypeScript and code quality standards via the quality check hook:
 
 **Zero Tolerance Violations:**
+
 - ❌ No `any` types - use proper TypeScript types
 - ❌ No `console.log` in source code - use Logger class
 - ❌ No CommonJS syntax - ES modules only
@@ -218,6 +219,7 @@ The project enforces strict TypeScript and code quality standards via the qualit
 - ❌ No `var` declarations - use `const`/`let` only
 
 **Required Patterns:**
+
 - ✅ Interfaces for object shapes (not `type`)
 - ✅ Proper error handling for all async operations
 - ✅ ES module imports with `import.meta.url` for `__dirname`

@@ -381,6 +381,13 @@ export class ClaudeCodeProvider implements Provider {
                 metadata?: Record<string, unknown>;
               };
 
+              // First yield the raw event for session recording
+              yield {
+                type: event.type || 'raw_event',
+                content: trimmedLine,
+                metadata: event.metadata || { session_id: event.session_id },
+              };
+
               // Handle Claude Code's actual JSON format
               if (event.type === 'stream_event' && event.event) {
                 const streamEvent = event.event;

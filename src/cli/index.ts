@@ -8,7 +8,7 @@ const chalk = new Chalk({ level: 3 });
 import { createInterface } from 'readline';
 import { ClaudeAPIProvider } from '../providers/claude-api';
 import type { Provider } from '../types/provider';
-import { readFileSync, promises as fs } from 'fs';
+import { readFileSync, promises as fs, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
@@ -59,6 +59,21 @@ marked.use(
     blockquote: chalk.gray.italic,
   }) as MarkedExtension
 );
+
+interface SessionEntry {
+  timestamp: string;
+  type: string;
+  content: string;
+  metadata?: Record<string, unknown>;
+}
+
+interface SessionData {
+  sessionId: string;
+  provider: string;
+  startTime: string;
+  endTime?: string;
+  entries: SessionEntry[];
+}
 
 export class CLI {
   public program: Command;
@@ -251,7 +266,22 @@ export class CLI {
       }
 
       // Always create a session for consistent experience
-      const session = { id: 'single-query-session', messages: [], state: {} };
+      const session = this.provider.createSession();
+
+      // Initialize session recording
+      const sessionData: SessionData = {
+        sessionId: session.id,
+        provider: this.provider.name,
+        startTime: new Date().toISOString(),
+        entries: [],
+      };
+
+      // Record user message
+      sessionData.entries.push({
+        timestamp: new Date().toISOString(),
+        type: 'user_message',
+        content: prompt,
+      });
 
       // Determine if we should use streaming based on the output format
       const useStreaming = options.stream ?? options.output === undefined;
@@ -265,8 +295,25 @@ export class CLI {
 
       let fullResponse = '';
       let inCodeBlock = false;
+      let assistantResponse = '';
 
       for await (const chunk of response) {
+        // Record the raw JSON chunk data - capture ALL chunk types
+        try {
+          sessionData.entries.push({
+            timestamp: new Date().toISOString(),
+            type: chunk.type || 'unknown',
+            content: JSON.stringify(chunk),
+            metadata: chunk.metadata || {},
+          });
+        } catch (error) {
+          console.error('Failed to record chunk:', error);
+        }
+
+        // Collect assistant response content for display
+        if (chunk.type === 'text' || chunk.type === undefined) {
+          assistantResponse += chunk.content;
+        }
         if (useStreaming) {
           switch (chunk.type) {
             case 'thinking':
@@ -321,6 +368,11 @@ export class CLI {
       if (!useStreaming) {
         this.outputResponse(fullResponse, options.output ?? 'text');
       }
+
+      // All JSON chunks are already recorded in the loop above
+
+      sessionData.endTime = new Date().toISOString();
+      await this.saveSessionData(sessionData);
     } catch (error) {
       if (error instanceof Error) {
         console.error(chalk.red(`Error: ${error.message}`));
@@ -378,6 +430,7 @@ export class CLI {
       { command: '/exit', description: 'Exit CageTools' },
       { command: '/help', description: 'Show available commands' },
       { command: '/resume', description: 'Resume a previous session' },
+      { command: '/sessions', description: 'View session history' },
       { command: '/markdown', description: 'Toggle markdown formatting' },
     ];
 
@@ -451,6 +504,546 @@ export class CLI {
 
     const clearCurrentLine = () => {
       process.stdout.write('\r\x1b[K');
+    };
+
+    // Shared selector UI for sessions
+    const showSelector = async <T>(
+      items: T[],
+      displayFunction: (item: T, isSelected: boolean) => string,
+      onSelect: (item: T) => Promise<void>,
+      title: string,
+      emptyMessage: string
+    ): Promise<void> => {
+      if (items.length === 0) {
+        console.log(chalk.yellow(emptyMessage));
+        showPrompt();
+        return;
+      }
+
+      console.log(chalk.green(`\n${title}`));
+      console.log(
+        chalk.gray('Use arrow keys to select, Enter to choose, ESC to cancel\n')
+      );
+
+      let selectedIndex = 0;
+      const maxDisplayCount = 15;
+      let scrollOffset = 0;
+
+      const showItems = () => {
+        // When we have fewer items than maxDisplayCount, only allocate space for actual items
+        const actualItemCount = items.length;
+        const needsScrollIndicator = actualItemCount > maxDisplayCount;
+        const displayableItems = Math.min(actualItemCount, maxDisplayCount);
+        const totalLines = needsScrollIndicator
+          ? displayableItems + 1
+          : displayableItems;
+
+        // Move cursor up to start of display area
+        process.stdout.write(`\x1b[${totalLines}A`);
+
+        // Calculate what items to show based on scroll position
+        const startIndex = scrollOffset;
+        const endIndex = Math.min(
+          startIndex + displayableItems,
+          actualItemCount
+        );
+        const displayItems = items.slice(startIndex, endIndex);
+
+        // Display each item
+        displayItems.forEach((item, displayIndex) => {
+          const actualIndex = startIndex + displayIndex;
+          const isSelected = actualIndex === selectedIndex;
+          const prefix = isSelected ? chalk.bgCyan.black(' ▶ ') : '   ';
+          const itemText = displayFunction(item, isSelected);
+          process.stdout.write(`\r\x1b[K${prefix} ${itemText}\n`);
+        });
+
+        // Clear any remaining lines (shouldn't happen with correct logic)
+        for (let i = displayItems.length; i < displayableItems; i++) {
+          process.stdout.write(`\r\x1b[K\n`);
+        }
+
+        // Show scroll indicator if needed
+        if (needsScrollIndicator) {
+          const currentPos = selectedIndex + 1;
+          const scrollInfo = chalk.dim(
+            `  [${currentPos}/${actualItemCount}] - Use ↑↓ to navigate`
+          );
+          process.stdout.write(`\r\x1b[K${scrollInfo}\n`);
+        }
+      };
+
+      // Initial display - allocate space for items (and scroll indicator if needed)
+      const actualItemCount = items.length;
+      const needsScrollIndicator = actualItemCount > maxDisplayCount;
+      const displayableItems = Math.min(actualItemCount, maxDisplayCount);
+      const totalLines = needsScrollIndicator
+        ? displayableItems + 1
+        : displayableItems;
+
+      for (let i = 0; i < totalLines; i++) {
+        console.log();
+      }
+      showItems();
+
+      const originalDataListeners = process.stdin.listeners('data');
+      process.stdin.removeAllListeners('data');
+
+      return new Promise<void>(resolve => {
+        const handleKey = (key: Buffer) => {
+          const keyCode = key[0];
+
+          if (keyCode === 27 && key.length === 1) {
+            process.stdin.removeListener('data', handleKey);
+            originalDataListeners.forEach(listener => {
+              process.stdin.on('data', listener as (chunk: Buffer) => void);
+            });
+            console.log(chalk.yellow('\nSelection cancelled'));
+            showPrompt();
+            resolve();
+            return;
+          }
+
+          if (key.length === 3 && key[0] === 27 && key[1] === 91) {
+            if (key[2] === 65) {
+              // Up arrow
+              if (selectedIndex > 0) {
+                selectedIndex--;
+                // Adjust scroll offset if needed
+                if (selectedIndex < scrollOffset) {
+                  scrollOffset = selectedIndex;
+                }
+                showItems();
+              }
+            } else if (key[2] === 66) {
+              // Down arrow
+              if (selectedIndex < items.length - 1) {
+                selectedIndex++;
+                // Adjust scroll offset if needed
+                if (selectedIndex >= scrollOffset + maxDisplayCount) {
+                  scrollOffset = selectedIndex - maxDisplayCount + 1;
+                }
+                showItems();
+              }
+            }
+          } else if (keyCode === 13) {
+            // Enter
+            process.stdin.removeListener('data', handleKey);
+            originalDataListeners.forEach(listener => {
+              process.stdin.on('data', listener as (chunk: Buffer) => void);
+            });
+            console.log();
+            onSelect(items[selectedIndex]).then(() => resolve());
+          }
+        };
+
+        process.stdin.on('data', handleKey);
+      });
+    };
+
+    // Function to handle session viewing
+    const handleSessionViewer = async () => {
+      console.log(chalk.cyan('\n📁 Loading session files...'));
+
+      const cagetoolsDir = join(process.cwd(), '.cagetools');
+
+      try {
+        if (!existsSync(cagetoolsDir)) {
+          console.log(
+            chalk.yellow('No .cagetools directory found in current directory')
+          );
+          showPrompt();
+          return;
+        }
+
+        const files = await fs.readdir(cagetoolsDir);
+        const sessionFiles = files.filter(
+          f => f.startsWith('session_') && f.endsWith('.json')
+        );
+
+        interface CageSession {
+          id: string;
+          time: Date;
+          provider: string;
+          userMessages: number;
+          assistantMessages: number;
+          duration: string;
+          filename: string;
+        }
+
+        const sessions: CageSession[] = [];
+
+        for (const file of sessionFiles) {
+          try {
+            const filePath = join(cagetoolsDir, file);
+            const stats = await fs.stat(filePath);
+            const content = await fs.readFile(filePath, 'utf-8');
+            const sessionData = JSON.parse(content) as SessionData;
+
+            const userMessages = sessionData.entries.filter(
+              e => e.type === 'user_message'
+            ).length;
+            // Count various assistant response types (text chunks, assistant messages, etc.)
+            const assistantMessages = sessionData.entries.filter(
+              e =>
+                e.type === 'text' ||
+                e.type === 'assistant' ||
+                e.type === 'assistant_response'
+            ).length;
+
+            const startTime = new Date(sessionData.startTime);
+            const endTime = sessionData.endTime
+              ? new Date(sessionData.endTime)
+              : new Date();
+            const durationMs = endTime.getTime() - startTime.getTime();
+            const duration = `${Math.round(durationMs / 1000)}s`;
+
+            sessions.push({
+              id: sessionData.sessionId,
+              time: startTime, // Use actual session start time, not file modification time
+              provider: sessionData.provider,
+              userMessages,
+              assistantMessages,
+              duration,
+              filename: file,
+            });
+          } catch (error) {
+            console.error(`Failed to parse session file ${file}:`, error);
+          }
+        }
+
+        sessions.sort((a, b) => b.time.getTime() - a.time.getTime());
+
+        await showSelector(
+          sessions,
+          (session: CageSession, isSelected: boolean) => {
+            const timeStr = session.time.toLocaleString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+            });
+            const info = `${timeStr} | ${session.provider} | ${session.userMessages}↑ ${session.assistantMessages}↓ | ${session.duration}`;
+            return isSelected ? chalk.bold.cyan(info) : chalk.gray(info);
+          },
+          async (session: CageSession) => {
+            console.log(chalk.green(`\n📄 Session: ${session.id}`));
+            console.log(
+              chalk.gray(
+                `Provider: ${session.provider} | Duration: ${session.duration}`
+              )
+            );
+            console.log(
+              chalk.gray(
+                `Messages: ${session.userMessages} user, ${session.assistantMessages} assistant\n`
+              )
+            );
+
+            try {
+              const filePath = join(cagetoolsDir, session.filename);
+              const content = await fs.readFile(filePath, 'utf-8');
+              const sessionData = JSON.parse(content) as SessionData;
+
+              // Process entries and combine streaming chunks
+              const combinedMessages: Array<{
+                timestamp: string;
+                type: 'user_message' | 'assistant_response';
+                content: string;
+              }> = [];
+
+              let currentAssistantMessage = '';
+              let assistantStartTime = '';
+
+              for (const entry of sessionData.entries) {
+                if (entry.type === 'user_message') {
+                  // If we have a pending assistant message, save it first
+                  if (currentAssistantMessage.trim()) {
+                    combinedMessages.push({
+                      timestamp: assistantStartTime,
+                      type: 'assistant_response',
+                      content: currentAssistantMessage.trim(),
+                    });
+                    currentAssistantMessage = '';
+                  }
+
+                  combinedMessages.push({
+                    timestamp: entry.timestamp,
+                    type: 'user_message',
+                    content: entry.content,
+                  });
+                } else {
+                  try {
+                    const chunkData = JSON.parse(entry.content);
+                    if (chunkData.type === 'text' && chunkData.content) {
+                      // Start or continue assistant message
+                      if (!currentAssistantMessage) {
+                        assistantStartTime = entry.timestamp;
+                      }
+                      currentAssistantMessage += chunkData.content;
+                    }
+                  } catch {
+                    // Skip non-text chunks or malformed data
+                  }
+                }
+              }
+
+              // Add final assistant message if exists
+              if (currentAssistantMessage.trim()) {
+                combinedMessages.push({
+                  timestamp: assistantStartTime,
+                  type: 'assistant_response',
+                  content: currentAssistantMessage.trim(),
+                });
+              }
+
+              // First show clean conversation view
+              console.log(chalk.yellow('\n=== Conversation View ===\n'));
+
+              // Properly reconstruct text from streaming chunks
+              let reconstructedAssistantMessage = '';
+              let assistantMessageStartTime = '';
+              let isInAssistantMessage = false;
+
+              for (const entry of sessionData.entries) {
+                if (entry.type === 'user_message') {
+                  // Flush any pending assistant message
+                  if (reconstructedAssistantMessage) {
+                    const timestamp = new Date(
+                      assistantMessageStartTime
+                    ).toLocaleTimeString();
+                    console.log(chalk.green(`[${timestamp}] Assistant:`));
+                    console.log(reconstructedAssistantMessage);
+                    console.log();
+                    reconstructedAssistantMessage = '';
+                    isInAssistantMessage = false;
+                  }
+
+                  // Show user message
+                  const timestamp = new Date(
+                    entry.timestamp
+                  ).toLocaleTimeString();
+                  console.log(chalk.blue(`[${timestamp}] User:`));
+                  console.log(entry.content);
+                  console.log();
+                } else if (entry.type === 'text') {
+                  // Handle text chunks from streaming
+                  try {
+                    const chunkData = JSON.parse(entry.content);
+                    if (chunkData.content) {
+                      if (!isInAssistantMessage) {
+                        assistantMessageStartTime = entry.timestamp;
+                        isInAssistantMessage = true;
+                      }
+                      reconstructedAssistantMessage += chunkData.content;
+                    }
+                  } catch {
+                    // Not JSON, skip
+                  }
+                } else if (entry.type === 'assistant') {
+                  // Handle complete assistant messages (non-streaming)
+                  try {
+                    const data = JSON.parse(entry.content);
+                    if (data.message?.content?.[0]?.text) {
+                      if (!isInAssistantMessage) {
+                        assistantMessageStartTime = entry.timestamp;
+                        isInAssistantMessage = true;
+                      }
+                      // For complete messages, add with newline if we have existing content
+                      if (
+                        reconstructedAssistantMessage &&
+                        !reconstructedAssistantMessage.endsWith('\n')
+                      ) {
+                        reconstructedAssistantMessage += '\n';
+                      }
+                      reconstructedAssistantMessage +=
+                        data.message.content[0].text;
+                    }
+                  } catch {
+                    // Not JSON, skip
+                  }
+                }
+              }
+
+              // Flush final assistant message if exists
+              if (reconstructedAssistantMessage) {
+                const timestamp = new Date(
+                  assistantMessageStartTime
+                ).toLocaleTimeString();
+                console.log(chalk.green(`[${timestamp}] Assistant:`));
+                console.log(reconstructedAssistantMessage);
+                console.log();
+              }
+
+              // Then show detailed event log
+              console.log(chalk.yellow('\n=== Detailed Event Log ===\n'));
+
+              // Helper to format event types with descriptions
+              const getEventDescription = (type: string): string => {
+                const descriptions: Record<string, string> = {
+                  user_message: '💬 User Input',
+                  system: '⚙️ System Init (tools, model, config)',
+                  stream_event: '📡 API Stream Event',
+                  text: '✏️ Text Content',
+                  assistant: '🤖 Assistant Message',
+                  user: '👤 Tool Result',
+                  result: '📊 Final Result (cost, usage, duration)',
+                  tool_use: '🔧 Tool Call',
+                  thinking: '💭 Thinking Process',
+                  error: '❌ Error',
+                  unknown: '❓ Unknown Event',
+                };
+                return descriptions[type] || `📦 ${type}`;
+              };
+
+              // Group consecutive text chunks for readability
+              let consecutiveTextCount = 0;
+              let lastWasText = false;
+
+              for (const entry of sessionData.entries) {
+                const timestamp = new Date(
+                  entry.timestamp
+                ).toLocaleTimeString();
+
+                if (entry.type === 'user_message') {
+                  // Always show user messages prominently
+                  console.log(chalk.blue.bold(`\n[${timestamp}] 💬 User:`));
+                  console.log(chalk.white(entry.content));
+                  lastWasText = false;
+                  consecutiveTextCount = 0;
+                } else if (entry.type === 'text' && lastWasText) {
+                  // Group consecutive text chunks
+                  consecutiveTextCount++;
+                  if (consecutiveTextCount === 1) {
+                    console.log(chalk.gray(`  ... (streaming text chunks)`));
+                  }
+                } else {
+                  // Show other event types with parsed content
+                  try {
+                    const data = JSON.parse(entry.content);
+                    const eventDesc = getEventDescription(entry.type);
+
+                    console.log(chalk.cyan(`\n[${timestamp}] ${eventDesc}`));
+
+                    // Show key information based on event type
+                    if (entry.type === 'system' && data.subtype === 'init') {
+                      console.log(chalk.gray(`  Model: ${data.model}`));
+                      console.log(
+                        chalk.gray(
+                          `  Tools: ${data.tools?.slice(0, 5).join(', ')}${data.tools?.length > 5 ? '...' : ''}`
+                        )
+                      );
+                    } else if (entry.type === 'result') {
+                      console.log(
+                        chalk.green(`  ✅ Success: ${!data.is_error}`)
+                      );
+                      console.log(
+                        chalk.yellow(
+                          `  💰 Cost: $${data.total_cost_usd || '0'}`
+                        )
+                      );
+                      console.log(
+                        chalk.gray(`  ⏱️ Duration: ${data.duration_ms}ms`)
+                      );
+                      if (data.usage) {
+                        console.log(
+                          chalk.gray(
+                            `  📈 Tokens: in=${data.usage.input_tokens}, out=${data.usage.output_tokens}`
+                          )
+                        );
+                      }
+                    } else if (entry.type === 'stream_event' && data.event) {
+                      const eventType = data.event.type;
+                      if (
+                        eventType === 'message_start' &&
+                        data.event.message?.usage
+                      ) {
+                        console.log(chalk.gray(`  Event: ${eventType}`));
+                        console.log(
+                          chalk.gray(
+                            `  Tokens: ${JSON.stringify(data.event.message.usage.input_tokens)}`
+                          )
+                        );
+                      } else if (
+                        eventType === 'content_block_start' &&
+                        data.event.content_block?.type === 'tool_use'
+                      ) {
+                        console.log(
+                          chalk.magenta(
+                            `  🔧 Tool: ${data.event.content_block.name}`
+                          )
+                        );
+                      } else {
+                        console.log(chalk.gray(`  Event: ${eventType}`));
+                      }
+                    } else if (entry.type === 'assistant' && data.message) {
+                      const msg = data.message;
+                      if (msg.content && msg.content[0]?.type === 'text') {
+                        console.log(
+                          chalk.green(
+                            `  Response: "${msg.content[0].text.substring(0, 100)}${msg.content[0].text.length > 100 ? '...' : ''}"`
+                          )
+                        );
+                      } else if (
+                        msg.content &&
+                        msg.content[0]?.type === 'tool_use'
+                      ) {
+                        console.log(
+                          chalk.magenta(`  Tool Use: ${msg.content[0].name}`)
+                        );
+                      }
+                    } else if (entry.type === 'user' && data.content) {
+                      if (data.content[0]?.type === 'tool_result') {
+                        console.log(
+                          chalk.blue(
+                            `  Tool Result: ${data.content[0].content?.substring(0, 100)}${data.content[0].content?.length > 100 ? '...' : ''}`
+                          )
+                        );
+                      }
+                    } else if (entry.type === 'text' && data.content) {
+                      console.log(
+                        chalk.white(
+                          `  Text: "${data.content.substring(0, 100)}${data.content.length > 100 ? '...' : ''}"`
+                        )
+                      );
+                      lastWasText = true;
+                      continue;
+                    }
+
+                    lastWasText = false;
+                    consecutiveTextCount = 0;
+                  } catch {
+                    // For entries that aren't JSON or failed to parse
+                    console.log(
+                      chalk.cyan(
+                        `\n[${timestamp}] ${getEventDescription(entry.type)}`
+                      )
+                    );
+                    if (
+                      typeof entry.content === 'string' &&
+                      entry.content.length < 200
+                    ) {
+                      console.log(chalk.gray(`  Content: ${entry.content}`));
+                    }
+                    lastWasText = false;
+                    consecutiveTextCount = 0;
+                  }
+                }
+              }
+
+              console.log(chalk.yellow('\n=== End of Detailed Event Log ==='));
+            } catch (error) {
+              console.error('Failed to read session content:', error);
+            }
+
+            showPrompt();
+          },
+          `Found ${sessions.length} session(s):`,
+          'No session files found in .cagetools directory'
+        );
+      } catch (error) {
+        console.error('Failed to read sessions directory:', error);
+        showPrompt();
+      }
     };
 
     // Function to handle session resume
@@ -751,6 +1344,12 @@ export class CLI {
         return;
       }
 
+      if (input.toLowerCase() === '/sessions') {
+        // Handle session viewer
+        await handleSessionViewer();
+        return;
+      }
+
       if (input.toLowerCase() === '/markdown') {
         this.formatMarkdownOutput = !this.formatMarkdownOutput;
         // Save the preference
@@ -806,6 +1405,22 @@ export class CLI {
               signal: currentResponseController.signal,
             }),
           };
+
+          // Initialize session recording for chat
+          const sessionData: SessionData = {
+            sessionId: session?.id || 'chat-session',
+            provider: this.provider.name,
+            startTime: new Date().toISOString(),
+            entries: [],
+          };
+
+          // Record user message
+          sessionData.entries.push({
+            timestamp: new Date().toISOString(),
+            type: 'user_message',
+            content: input,
+          });
+
           const response = this.provider.query(input, queryOptions);
           let inCodeBlock = false;
           let fullResponse = '';
@@ -854,6 +1469,18 @@ export class CLI {
               console.log(chalk.yellow('🛑 Response interrupted'));
               console.log();
               break;
+            }
+
+            // Record the raw JSON chunk data for chat - capture ALL chunk types
+            try {
+              sessionData.entries.push({
+                timestamp: new Date().toISOString(),
+                type: chunk.type || 'unknown',
+                content: JSON.stringify(chunk),
+                metadata: chunk.metadata || {},
+              });
+            } catch (error) {
+              console.error('Failed to record chat chunk:', error);
             }
 
             // If markdown formatting is enabled, collect and render incrementally
@@ -972,6 +1599,10 @@ export class CLI {
           }
 
           console.log(); // New line after response
+
+          // Save chat session data
+          sessionData.endTime = new Date().toISOString();
+          await this.saveSessionData(sessionData);
         } catch (error) {
           if (!currentResponseController?.signal.aborted) {
             console.log();
@@ -1213,6 +1844,27 @@ export class CLI {
       default:
         console.log(response);
         break;
+    }
+  }
+
+  private async saveSessionData(sessionData: SessionData): Promise<void> {
+    try {
+      const cagetoolsDir = join(process.cwd(), '.cagetools');
+      if (!existsSync(cagetoolsDir)) {
+        await fs.mkdir(cagetoolsDir, { recursive: true });
+      }
+
+      const filePath = join(
+        cagetoolsDir,
+        `session_${sessionData.sessionId}.json`
+      );
+      await fs.writeFile(
+        filePath,
+        JSON.stringify(sessionData, null, 2),
+        'utf-8'
+      );
+    } catch (error) {
+      console.error('Failed to save session data:', error);
     }
   }
 }
