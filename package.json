@@ -25,7 +25,7 @@
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run test",
     "mcp:import": "node scripts/import-mcp-config.js",
     "mcp:setup": "npm run mcp:import",
-    "postinstall": "npm run setup:hooks",
+    "postinstall": "npm run setup:hooks && patch-package",
     "setup:hooks": "cd .claude/hooks/cli-app && npm install && chmod +x quality-check.js"
   },
   "dependencies": {
@@ -34,6 +34,8 @@
     "chalk": "^5.3.0",
     "commander": "^14.0.0",
     "inquirer": "^12.9.4",
+    "marked": "^15.0.12",
+    "marked-terminal": "^7.3.0",
     "winston": "^3.17.0",
     "zod": "^3.25.76"
   },
@@ -43,6 +45,7 @@
     "@swc/cli": "^0.7.8",
     "@swc/core": "^1.13.3",
     "@types/inquirer": "^9.0.7",
+    "@types/marked-terminal": "^6.1.1",
     "@types/node": "^22.18.1",
     "@types/ora": "^3.1.0",
     "@typescript-eslint/eslint-plugin": "^8.35.0",
@@ -53,6 +56,7 @@
     "eslint-plugin-prettier": "^5.5.0",
     "nodemon": "^3.1.10",
     "ora": "^8.2.0",
+    "patch-package": "^8.0.0",
     "prettier": "^3.6.0",
     "tsx": "^4.20.5",
     "typescript": "~5.7.2",

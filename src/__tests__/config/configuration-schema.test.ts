@@ -290,6 +290,7 @@ describe('Configuration Schema', () => {
           spinners: true,
           progressBars: true,
           icons: true,
+          formatMarkdown: false,
         },
       };
 

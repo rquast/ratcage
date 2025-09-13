@@ -1,5 +1,9 @@
 import { Command } from 'commander';
-import chalk from 'chalk';
+import { Chalk } from 'chalk';
+
+// Force chalk to use colors - fixes issue where chalk.level is 0
+// and marked-terminal doesn't apply formatting
+const chalk = new Chalk({ level: 3 });
 import { createInterface } from 'readline';
 import { ClaudeAPIProvider } from '../providers/claude-api';
 import type { Provider } from '../types/provider';
@@ -7,6 +11,9 @@ import { readFileSync, promises as fs } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
+import { marked } from 'marked';
+import type { MarkedExtension } from 'marked';
+import { markedTerminal } from 'marked-terminal';
 
 // ES module __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -30,10 +37,33 @@ interface PackageJson {
   description?: string;
 }
 
+// Configure marked with terminal renderer using the modern plugin API
+// We need to use our forced-color chalk instance
+// The type definitions for marked-terminal are outdated - it actually returns a valid MarkedExtension
+marked.use(
+  markedTerminal({
+    showSectionPrefix: false,
+    width: process.stdout.columns || 120,
+    reflowText: false, // Don't reflow text - preserve original formatting
+    tab: 2,
+    // Style configuration - should be chalk styles directly (not functions)
+    firstHeading: chalk.bold.cyan,
+    heading: chalk.bold.green,
+    strong: chalk.bold, // Default bold for strong text
+    em: chalk.italic,
+    codespan: chalk.yellow,
+    del: chalk.strikethrough,
+    link: chalk.blue,
+    href: chalk.blue.underline,
+    blockquote: chalk.gray.italic,
+  }) as MarkedExtension
+);
+
 export class CLI {
   public program: Command;
   private provider?: Provider;
   private config: Record<string, unknown> = {};
+  private formatMarkdownOutput = true; // Default to formatted markdown
 
   constructor() {
     this.program = new Command();
@@ -301,6 +331,12 @@ export class CLI {
       return;
     }
 
+    // Load markdown preference from config
+    const formatMarkdownConfig = this.config['formatMarkdown'];
+    if (formatMarkdownConfig !== undefined) {
+      this.formatMarkdownOutput = formatMarkdownConfig === 'true';
+    }
+
     console.log(chalk.green('🤖 CageTools'));
     console.log(
       chalk.gray('💡 Commands: /exit to quit, /clear to reset context')
@@ -339,6 +375,7 @@ export class CLI {
       { command: '/exit', description: 'Exit CageTools' },
       { command: '/help', description: 'Show available commands' },
       { command: '/resume', description: 'Resume a previous session' },
+      { command: '/markdown', description: 'Toggle markdown formatting' },
     ];
 
     const getMatchingCommands = () => {
@@ -711,6 +748,30 @@ export class CLI {
         return;
       }
 
+      if (input.toLowerCase() === '/markdown') {
+        this.formatMarkdownOutput = !this.formatMarkdownOutput;
+        // Save the preference
+        await this.setConfig(
+          'formatMarkdown',
+          String(this.formatMarkdownOutput)
+        );
+        console.log(
+          chalk.cyan(
+            `\nMarkdown formatting: ${this.formatMarkdownOutput ? chalk.green('ON') : chalk.yellow('OFF')}`
+          )
+        );
+        console.log(
+          chalk.gray(
+            this.formatMarkdownOutput
+              ? 'Responses will be formatted for better readability'
+              : 'Responses will be shown as raw markdown'
+          )
+        );
+        console.log();
+        showPrompt();
+        return;
+      }
+
       if (this.provider) {
         isProcessing = true;
         currentResponseController = new AbortController();
@@ -744,6 +805,7 @@ export class CLI {
           };
           const response = this.provider.query(input, queryOptions);
           let inCodeBlock = false;
+          let fullResponse = '';
 
           for await (const chunk of response) {
             // Check if we should abort
@@ -754,49 +816,75 @@ export class CLI {
               break;
             }
 
-            switch (chunk.type) {
-              case 'thinking':
-                process.stdout.write(chalk.gray(chunk.content));
-                break;
-              case 'code_snippet':
-                if (!inCodeBlock) {
-                  process.stdout.write(
-                    chalk.blue('\n```' + (chunk.language ?? '') + '\n')
-                  );
-                  inCodeBlock = true;
-                }
-                process.stdout.write(chalk.cyan(chunk.content));
-                if (chunk.isComplete) {
-                  process.stdout.write(chalk.blue('\n```\n'));
-                  inCodeBlock = false;
-                }
-                break;
-              case 'partial_code':
-                process.stdout.write(chalk.cyan(chunk.content));
-                break;
-              case 'tool_use':
-                process.stdout.write(
-                  chalk.yellow(
-                    `[Tool: ${chunk.metadata?.toolName ?? 'unknown'}] `
-                  )
-                );
-                process.stdout.write(chunk.content);
-                break;
-              case 'tool_result':
+            // If markdown formatting is enabled, collect all text chunks
+            if (this.formatMarkdownOutput) {
+              // Only collect text content for markdown rendering
+              if (chunk.type === 'text' || chunk.type === undefined) {
+                fullResponse += chunk.content;
+              }
+              // Still show tool use, errors, etc. immediately
+              else if (chunk.type === 'tool_result') {
                 process.stdout.write(chalk.green(`[Result] ${chunk.content}`));
-                break;
-              case 'error':
+              } else if (chunk.type === 'error') {
                 process.stdout.write(chalk.red(`[Error] ${chunk.content}`));
-                break;
-              case 'text':
-              default:
-                process.stdout.write(chunk.content);
-                break;
+              }
+            } else {
+              // Normal streaming output when markdown formatting is off
+              switch (chunk.type) {
+                case 'thinking':
+                  process.stdout.write(chalk.gray(chunk.content));
+                  break;
+                case 'code_snippet':
+                  if (!inCodeBlock) {
+                    process.stdout.write(
+                      chalk.blue('\n```' + (chunk.language ?? '') + '\n')
+                    );
+                    inCodeBlock = true;
+                  }
+                  process.stdout.write(chalk.cyan(chunk.content));
+                  if (chunk.isComplete) {
+                    process.stdout.write(chalk.blue('\n```\n'));
+                    inCodeBlock = false;
+                  }
+                  break;
+                case 'partial_code':
+                  process.stdout.write(chalk.cyan(chunk.content));
+                  break;
+                case 'tool_use':
+                  process.stdout.write(
+                    chalk.yellow(
+                      `[Tool: ${chunk.metadata?.toolName ?? 'unknown'}] `
+                    )
+                  );
+                  process.stdout.write(chunk.content);
+                  break;
+                case 'tool_result':
+                  process.stdout.write(
+                    chalk.green(`[Result] ${chunk.content}`)
+                  );
+                  break;
+                case 'error':
+                  process.stdout.write(chalk.red(`[Error] ${chunk.content}`));
+                  break;
+                case 'text':
+                default:
+                  process.stdout.write(chunk.content);
+                  break;
+              }
             }
           }
 
-          // Close any open code block
-          if (inCodeBlock) {
+          // If markdown formatting is enabled, render the complete response
+          if (this.formatMarkdownOutput && fullResponse) {
+            try {
+              const rendered = marked.parse(fullResponse) as string;
+              process.stdout.write(rendered);
+            } catch {
+              // Fallback to raw output if rendering fails
+              process.stdout.write(fullResponse);
+            }
+          } else if (!this.formatMarkdownOutput && inCodeBlock) {
+            // Close any open code block for non-markdown mode
             process.stdout.write(chalk.blue('\n```\n'));
           }
 

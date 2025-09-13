@@ -112,6 +112,7 @@ export const UIConfigSchema = z.object({
   spinners: z.boolean().default(true),
   progressBars: z.boolean().default(true),
   icons: z.boolean().default(true),
+  formatMarkdown: z.boolean().default(true),
 });
 
 /**

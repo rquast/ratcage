@@ -11,6 +11,7 @@ export default defineConfig({
     // Use forks for better test isolation
     pool: 'forks',
     isolate: true, // Run each test file in isolation
+    setupFiles: ['./vitest.setup.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

@@ -27,6 +27,8 @@ export default defineConfig({
         '@anthropic-ai/sdk',
         '@modelcontextprotocol/sdk',
         '@modelcontextprotocol/server-filesystem',
+        'marked',
+        'marked-terminal',
         'ora',
         'child_process',
         'fs',

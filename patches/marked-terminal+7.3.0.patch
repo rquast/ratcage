@@ -1,0 +1,44 @@
+diff --git a/node_modules/marked-terminal/index.js b/node_modules/marked-terminal/index.js
+index 5e2d4b4..2a7f477 100644
+--- a/node_modules/marked-terminal/index.js
++++ b/node_modules/marked-terminal/index.js
+@@ -181,7 +181,17 @@ Renderer.prototype.listitem = function (text) {
+       }
+     }
+ 
+-    text += this.parser.parse(item.tokens, !!item.loose);
++    // Fix for inline formatting in list items (from PR #372)
++    for (let i = 0; i < item.tokens.length; i++) {
++      const token = item.tokens[i];
++      if (token.type === 'text' && token.tokens) {
++        // This is inline content with formatting, use parseInline
++        text += this.parser.parseInline(token.tokens);
++      } else {
++        // This is block content or plain text, use parse
++        text += this.parser.parse([token], !!item.loose);
++      }
++    }
+   }
+   var transform = compose(this.o.listitem, this.transform);
+   var isNested = text.indexOf('\n') !== -1;
+@@ -551,6 +561,20 @@ var numberedPoint = function (n) {
+   return n + '. ';
+ };
+ function numberedLine(indent, line, num) {
++  // Check if this line is a nested list item (starts with spaces then * or number.)
++  // If it is, don't treat it as part of the parent numbered list
++  const trimmedLine = line.trimStart();
++  const leadingSpaces = line.length - trimmedLine.length;
++
++  // If line has leading spaces and starts with a bullet or number, it's a nested list item
++  // Keep it as-is without renumbering
++  if (leadingSpaces > 0 && (trimmedLine.startsWith('* ') || /^\d+\.\s/.test(trimmedLine))) {
++    return {
++      num: num,
++      line: line // Keep the line unchanged
++    };
++  }
++
+   return isPointedLine(line, indent)
+     ? {
+         num: num + 1,
